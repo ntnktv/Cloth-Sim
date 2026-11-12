@@ -97,6 +97,17 @@ FLOW.</textarea>
       <div class="popover">
         <p id="exportInfo" class="muted">SVG точно в размере холста.</p>
         <button id="svg" class="primary wide">SVG-композиция</button>
+        <div class="card export-options">
+          <label class="row" title="По флагам: каждый флаг целиком в своей группе, его можно двигать в Figma">слои SVG<select id="svgMode">
+            <option value="merged" selected>объединить</option>
+            <option value="separate">по флагам</option>
+          </select></label>
+          <label class="row" title="Меньше точек — легче файл для Figma">контуры<select id="svgSimplify">
+            <option value="0">точные</option>
+            <option value="0.15" selected>легче</option>
+            <option value="0.4">самые лёгкие</option>
+          </select></label>
+        </div>
         <button id="png" class="pill wide">PNG-кадр</button>
         <div class="card export-options">
           <label class="row">растр<select id="exportSize">
@@ -111,6 +122,7 @@ FLOW.</textarea>
             <option value="video">видео / WebM</option>
           </select></label>
         </div>
+        <label class="toggle block" title="Конец анимации плавно стыкуется с началом"><input id="loop" type="checkbox"><span>зациклить анимацию</span></label>
         <button id="animate" class="pill wide">Анимация</button>
       </div>
     </details>

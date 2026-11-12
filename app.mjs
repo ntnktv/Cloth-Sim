@@ -292,7 +292,16 @@ function renderList() {
         draw();
       }
     };
-    row.append(choose, eye);
+    if (!f.shapes) {
+      const badge = document.createElement("button");
+      badge.className = "badge" + (f.reason ? " warn" : "");
+      badge.textContent = f.reason ? "!" : "растр";
+      badge.title = f.reason
+        ? "Не попадёт в SVG: " + f.reason
+        : "Растровый слой: есть в PNG и анимации, для SVG его нужно скрыть";
+      badge.onclick = () => status(badge.title);
+      row.append(choose, badge, eye);
+    } else row.append(choose, eye);
     entry.append(pause, row);
     list.append(entry);
   }
@@ -1291,6 +1300,19 @@ document.addEventListener("drop", (e) => {
   $("stage").classList.remove("dragging");
   loadFiles([...e.dataTransfer.files]);
 });
+let pasteCount = 0;
+document.addEventListener("paste", (e) => {
+  if (/INPUT|TEXTAREA/.test(e.target.tagName) || busy || loading) return;
+  const files = [...(e.clipboardData?.files || [])],
+    text = e.clipboardData?.getData("text/plain") || "";
+  if (files.length) {
+    e.preventDefault();
+    loadFiles(files.map((f) => (f.name ? f : new File([f], `Вставка ${++pasteCount}.png`, { type: f.type }))));
+  } else if (/<svg[\s>]/i.test(text)) {
+    e.preventDefault();
+    loadFiles([new File([text], `Вставка ${++pasteCount}.svg`, { type: "image/svg+xml" })]);
+  }
+});
 $("help").onclick = () => $("helpDialog").showModal();
 $("closeHelp").onclick = () => $("helpDialog").close();
 $("closeVector").onclick = () => $("vectorDialog").close();
@@ -1437,7 +1459,7 @@ $("svg").onclick = async () => {
       if (rasterURL) $("rasterImage").src = rasterURL;
       else $("rasterImage").removeAttribute("src");
       $("vectorStats").textContent =
-        `${scene.width} × ${scene.height} · ${snapshot.length} флагов · ${result.paths} контуров · ${(file.size / 1048576).toFixed(1)} МБ`;
+        `${scene.width} × ${scene.height} · ${snapshot.length} флагов · ${result.paths} контуров · ${result.points.toLocaleString("ru")} точек · ${(file.size / 1048576).toFixed(1)} МБ`;
       $("vectorDialog").showModal();
       status("SVG-композиция готова. Скачайте файл в окне проверки.");
     };
@@ -1448,7 +1470,10 @@ $("svg").onclick = async () => {
       draw();
       status("Не удалось рассчитать SVG. Уменьшите детализацию сцены.");
     };
-    w.postMessage({ flags: snapshot, options: { ...scene, layered: true } });
+    w.postMessage({
+      flags: snapshot,
+      options: { ...scene, layered: true, separate: $("svgMode").value === "separate", simplify: +$("svgSimplify").value },
+    });
   } catch (e) {
     worker?.terminate();
     worker = null;
@@ -1457,6 +1482,35 @@ $("svg").onclick = async () => {
     status(e.message);
   }
 };
+// Simulates count + blend frames and returns a function that applies loop frame i: the first
+// frames are cross-faded with the frames after the end, so frame count-1 flows into frame 0.
+async function simulateLoop(count, dt) {
+  const blend = Math.min(count, 45),
+    active = flags.filter((f) => f.visible && f.animationEnabled !== false),
+    bytes = active.reduce((s, f) => s + f.cloth.p.byteLength, 0) * (count + blend);
+  if (bytes > 500e6) throw new Error("Слишком длинный цикл для такой сцены. Уменьшите длительность.");
+  const record = [];
+  for (let i = 0; i < count + blend; i++) {
+    if (cancel) throw new Error("Экспорт отменён.");
+    if (i) await stepAsync(2, dt);
+    record.push(active.map((f) => f.cloth.p.slice()));
+    if (i % 10 === 0) status(`Считаю цикл: ${Math.round((i / (count + blend)) * 100)}%`);
+  }
+  return (i) => {
+    const t = i < blend ? i / blend : 1,
+      w = t * t * (3 - 2 * t);
+    active.forEach((f, k) => {
+      const a = record[i][k],
+        p = f.cloth.p;
+      if (w >= 1) p.set(a);
+      else {
+        const b = record[i + count][k];
+        for (let j = 0; j < p.length; j++) p[j] = b[j] + (a[j] - b[j]) * w;
+      }
+      f.cloth.computeNormals();
+    });
+  };
+}
 async function exportSequence() {
   const starts = new Map(
     videos(flags.filter((f) => f.animationEnabled !== false)).map((v) => [v, v.currentTime]),
@@ -1465,9 +1519,11 @@ async function exportSequence() {
     files = [],
     [w, h] = rasterDimensions();
   let bytes = 0;
+  const loop = $("loop").checked ? await simulateLoop(count, (1 / 60) * scene.speed) : null;
   for (let frame = 0; frame < count; frame++) {
     if (cancel) throw new Error("Экспорт отменён.");
-    if (frame) await stepAsync(2, (1 / 60) * scene.speed);
+    if (loop) loop(frame);
+    else if (frame) await stepAsync(2, (1 / 60) * scene.speed);
     await Promise.all([...starts].map(([v, time]) => seekVideo(v, time + (frame / 30) * scene.speed)));
     if (cancel) throw new Error("Экспорт отменён.");
     renderer.draw(flags, scene, w, h, true);
@@ -1481,7 +1537,7 @@ async function exportSequence() {
   }
   files.push({
     name: "README.txt",
-    data: new TextEncoder().encode(`${count} frames at 30 fps. ${w} x ${h}. Not a seamless loop.`),
+    data: new TextEncoder().encode(`${count} frames at 30 fps. ${w} x ${h}. ${loop ? "Seamless loop." : "Not a seamless loop."}`),
   });
   download(makeZip(files), "cloth-composition-30fps.zip");
   status("PNG-последовательность композиции сохранена.");
@@ -1510,11 +1566,12 @@ async function exportVideo() {
       recorder.onstop = resolve;
       recorder.onerror = () => reject(new Error("Ошибка записи видео."));
     });
+    const duration = exportSeconds(),
+      loop = $("loop").checked ? await simulateLoop(duration * 30, (1 / 60) * scene.speed) : null;
     recordingMedia = true;
     syncVideos(flags, true, scene.speed, status);
     recorder.start();
-    const start = performance.now(),
-      duration = exportSeconds();
+    const start = performance.now();
     let previous = start,
       acc = 0;
     try {
@@ -1524,7 +1581,8 @@ async function exportVideo() {
         acc += Math.min((now - previous) / 1000, 0.1) * scene.speed;
         previous = now;
         const n = Math.min(6, Math.floor(acc * 60));
-        if (n) {
+        if (loop) loop(Math.min(duration * 30 - 1, Math.floor(((now - start) / 1000) * 30)));
+        else if (n) {
           acc -= n / 60;
           await stepAsync(n);
         }

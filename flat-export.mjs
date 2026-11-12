@@ -25,23 +25,66 @@ const unionAll = (items) => {
   }
   return items[0];
 };
-function ringsPath(poly, width, height) {
-  const n = (x) => Number(x.toFixed(5));
-  return poly
-    .map((p) =>
-      p
-        .map(
-          (r) =>
-            "M" +
-            r
-              .slice(0, -1)
-              .map(([x, y]) => n(((x + 1) * width) / 2) + " " + n(((1 - y) * height) / 2))
-              .join("L") +
-            "Z",
-        )
-        .join(""),
-    )
-    .join("");
+// Douglas–Peucker on a closed ring (px). Keeps at least a triangle.
+function simplifyRing(pts, tolerance) {
+  if (pts.length < 5) return pts;
+  const keep = new Uint8Array(pts.length);
+  let far = 0,
+    best = -1;
+  for (let i = 1; i < pts.length; i++) {
+    const d = (pts[i][0] - pts[0][0]) ** 2 + (pts[i][1] - pts[0][1]) ** 2;
+    if (d > best) {
+      best = d;
+      far = i;
+    }
+  }
+  keep[0] = keep[far] = keep[pts.length - 1] = 1;
+  const stack = [
+    [0, far],
+    [far, pts.length - 1],
+  ];
+  while (stack.length) {
+    const [a, b] = stack.pop(),
+      ax = pts[a][0],
+      ay = pts[a][1],
+      dx = pts[b][0] - ax,
+      dy = pts[b][1] - ay,
+      len = Math.hypot(dx, dy);
+    let index = -1,
+      max = tolerance;
+    for (let i = a + 1; i < b; i++) {
+      const d = len
+        ? Math.abs((pts[i][0] - ax) * dy - (pts[i][1] - ay) * dx) / len
+        : Math.hypot(pts[i][0] - ax, pts[i][1] - ay);
+      if (d > max) {
+        max = d;
+        index = i;
+      }
+    }
+    if (index > 0) {
+      keep[index] = 1;
+      stack.push([a, index], [index, b]);
+    }
+  }
+  const out = pts.filter((_, i) => keep[i]);
+  return out.length >= 4 ? out : pts;
+}
+function ringsPath(poly, width, height, tolerance = 0) {
+  const n = (x) => Number(x.toFixed(tolerance ? 2 : 5));
+  let d = "";
+  for (const p of poly)
+    for (const r of p) {
+      let pts = r.map(([x, y]) => [((x + 1) * width) / 2, ((1 - y) * height) / 2]);
+      if (tolerance) pts = simplifyRing(pts, tolerance);
+      d +=
+        "M" +
+        pts
+          .slice(0, -1)
+          .map(([x, y]) => n(x) + " " + n(y))
+          .join("L") +
+        "Z";
+    }
+  return d;
 }
 export function exportFlatSVG(cloth, o, shapes, onProgress = () => {}) {
   return exportProjectedSVG([{ cloth, points: projectCloth(cloth, o), shapes }], o, onProgress);
@@ -53,7 +96,7 @@ export function exportSceneSVG(flags, o, onProgress = () => {}) {
       "Для SVG все видимые флаги должны быть векторными. Скройте растровые объекты или выберите PNG.",
     );
   return exportProjectedSVG(
-    flags.map((f) => ({ cloth: f.cloth, points: projectFlag(f, o), shapes: f.shapes })),
+    flags.map((f) => ({ cloth: f.cloth, points: projectFlag(f, o), shapes: f.shapes, name: f.name })),
     o,
     onProgress,
   );
@@ -97,7 +140,9 @@ function exportProjectedSVG(items, o, onProgress) {
   const groups = o.layered ? layers.slice().reverse() : [faces],
     cache = new Map(),
     colors = new Map(),
-    total = faces.length;
+    total = faces.length,
+    separate = !!(o.layered && o.separate),
+    perLayer = [];
   let operations = 0,
     done = 0,
     fragments = 0,
@@ -216,6 +261,11 @@ function exportProjectedSVG(items, o, onProgress) {
       }
     }
     const merged = [...layerColors].map(([fill, polys]) => [fill, unionAll(polys)]);
+    // separate: every flag is exported whole in its own group, so it can be moved in Figma.
+    if (separate) {
+      perLayer.unshift({ name: items[items.length - 1 - g].name, merged });
+      continue;
+    }
     for (const [fill, poly] of merged) {
       const visible = cover.length ? polygon.difference(poly, cover) : poly;
       if (!visible.length) continue;
@@ -226,19 +276,37 @@ function exportProjectedSVG(items, o, onProgress) {
       cover = polygon.union(cover, ...merged.map(([, poly]) => poly));
   }
   onProgress("Объединяю одноцветные участки…");
-  const merged = [...colors].map(([fill, polys]) => ({ fill, poly: unionAll(polys) }));
-  const silhouette = unionAll(merged.map((x) => x.poly));
-  let body = "";
-  if (silhouette.length && merged.length)
-    body += `<path fill="${merged[0].fill}" fill-rule="evenodd" d="${ringsPath(silhouette, o.width, o.height)}"/>`;
-  for (const { fill, poly } of merged)
-    body += `<path fill="${fill}" fill-rule="evenodd" d="${ringsPath(poly, o.width, o.height)}"/>`;
+  const tolerance = +o.simplify || 0,
+    esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  let body = "",
+    paths = 0,
+    points = 0;
+  const emit = (fill, poly) => {
+    const d = ringsPath(poly, o.width, o.height, tolerance);
+    paths++;
+    points += d.split("L").length;
+    return `<path fill="${fill}" fill-rule="evenodd" d="${d}"/>`;
+  };
+  // A silhouette in the first colour sits under each set of paths and hides hairline seams.
+  const paint = (merged) => {
+    const silhouette = unionAll(merged.map((x) => x.poly));
+    let out = silhouette.length && merged.length > 1 ? emit(merged[0].fill, silhouette) : "";
+    for (const { fill, poly } of merged) out += emit(fill, poly);
+    return out;
+  };
+  if (separate)
+    for (const layer of perLayer) {
+      const merged = layer.merged.map(([fill, poly]) => ({ fill, poly })).filter((x) => x.poly.length);
+      if (merged.length) body += `<g id="${esc(layer.name)}">${paint(merged)}</g>`;
+    }
+  else body = paint([...colors].map(([fill, polys]) => ({ fill, poly: unionAll(polys) })));
   const bg =
     o.background === "transparent" ? "" : `<rect width="100%" height="100%" fill="${o.background}"/>`;
   return {
     text: `<svg xmlns="http://www.w3.org/2000/svg" width="${o.width}" height="${o.height}" viewBox="0 0 ${o.width} ${o.height}"><title>Cloth — vector composition</title><desc>Flat vector contours from simulated cloth. Curves adaptively approximated before deformation. No raster, clipping masks or filters.</desc>${bg}${body}</svg>`,
     triangles: faces.length,
     fragments,
-    paths: merged.length + 1,
+    paths,
+    points,
   };
 }

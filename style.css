@@ -286,3 +286,7 @@ body.reordering,body.reordering *{cursor:grabbing!important;user-select:none}
 .busy-card p{margin:0;font-size:13px}
 .spinner{width:22px;height:22px;border-radius:50%;border:2.5px solid var(--card-2);border-top-color:var(--accent);animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
+.badge{flex:0 0 auto;font-size:10px;color:var(--muted);background:var(--card);border-radius:var(--r-pill);padding:2px 7px}
+.badge.warn{background:#ffe3e0;color:#d92d20;font-weight:700;width:18px;height:18px;padding:0;display:grid;place-items:center}
+.popover .toggle.block{margin:2px 0 4px}
+#pinMode{margin-top:-2px}
