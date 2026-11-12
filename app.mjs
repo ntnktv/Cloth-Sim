@@ -64,7 +64,17 @@ const selectedFlags = () => flags.filter((f) => selection.has(f.id)),
   selected = () => (selection.size === 1 ? flags.find((f) => f.id === selectedId) : undefined),
   primary = () => flags.find((f) => f.id === selectedId && selection.has(f.id)) || selectedFlags()[0],
   visible = () => flags.filter((f) => f.visible),
-  status = (s) => ($("status").textContent = s);
+  status = (s) => {
+    $("status").textContent = s;
+    if (!$("busyOverlay").hidden) $("busyText").textContent = s;
+  };
+function showBusy(message) {
+  $("busyOverlay").hidden = !message;
+  $("busyText").textContent = message;
+}
+// One place for every per-flag property that is saved, undone and duplicated.
+const FLAG_PROPS = ["name", "x", "y", "width", "roll", "edge", "pin", "resolution", "visible", "animationEnabled", "gust", "locked", "group", "rect"];
+const flagProps = (f) => ({ ...Object.fromEntries(FLAG_PROPS.map((k) => [k, f[k]])), options: { ...f.options } });
 function setSelection(ids, primaryId = ids[ids.length - 1] ?? null) {
   selection = new Set(ids);
   selectedId = selection.has(primaryId) ? primaryId : (ids[ids.length - 1] ?? null);
@@ -360,6 +370,9 @@ function sync() {
     b.classList.toggle("active", on);
     b.setAttribute("aria-pressed", String(on));
   }
+  for (const b of $("pinMode").querySelectorAll("button"))
+    b.classList.toggle("active", list.every((x) => (x.pin || "edge") === b.dataset.value));
+  setField("gust", list.map((x) => x.gust || 0), 1);
   draw();
 }
 function makeAlpha(img) {
@@ -394,9 +407,9 @@ function addImage(image, name, shapes, reason = "", { above = null, select = tru
 }
 // SVG artwork is rasterized for the GPU at high resolution instead of its nominal pixel size,
 // so a small Figma export stays sharp when the flag is large. Vector export is unaffected.
-function rasterizeSVG(image) {
+function rasterizeSVG(image, wanted = 2048) {
   const maxTexture = renderer?.gl?.getParameter(renderer.gl.MAX_TEXTURE_SIZE) || 4096,
-    long = Math.min(4096, maxTexture),
+    long = Math.min(wanted, maxTexture),
     w = image.width,
     h = image.height,
     s = Math.min(long / Math.max(w, h), Math.sqrt(4.2e6 / (w * h)));
@@ -448,7 +461,7 @@ async function decodeFile(file) {
     const ratio = Math.max(image.width / image.height, image.height / image.width);
     if (ratio > MAX_RATIO)
       throw new Error(`Пропорции ${Math.round(ratio)}:1 — максимум ${MAX_RATIO}:1.`);
-    return { image: svg ? rasterizeSVG(image) : image, shapes, reason };
+    return { image: svg ? rasterizeSVG(image, 1024) : image, svgImage: svg ? image : null, shapes, reason };
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -466,10 +479,11 @@ async function loadFiles(files) {
       break;
     }
     try {
-      const { image, shapes, reason } = await decodeFile(file);
+      const { image, svgImage, shapes, reason } = await decodeFile(file);
       const name = file.name.startsWith("Прямоугольник") ? file.name.replace(/\.svg$/i, "") : file.name;
       const flag = addImage(image, name, shapes, reason, { select: false });
       flag.source = { name: file.name, blob: file };
+      flag.svgImage = svgImage;
       addedIds.push(flag.id);
       added++;
       if (reason) errors.push(file.name + ": " + reason);
@@ -499,14 +513,11 @@ $("duplicate").onclick = async () => {
         if (isVideo(image)) image = await cloneVideo(image);
         const copy = addImage(image, f.name + " — копия", f.shapes, f.reason, { above: f, select: false });
         Object.assign(copy, {
+          ...flagProps(f),
+          name: copy.name,
           source: f.source,
-          animationEnabled: f.animationEnabled,
-          edge: f.edge,
-          resolution: f.resolution,
-          width: f.width,
-          yaw: f.yaw,
-          pitch: f.pitch,
-          roll: f.roll,
+          svgImage: f.svgImage,
+          gust: 0,
           x: f.x + scene.width * 0.04,
           y: f.y + scene.height * 0.04,
           options: { ...f.options, phase: copy.options.phase },
@@ -619,6 +630,7 @@ $("resetParams").onclick = () => {
     f.options = { ...clothDefaults, ...(scene.globalWind ? keep : {}), phase: f.options.phase };
     f.cloth.reset();
   }
+  touchSim();
   sync();
 };
 $("resetAllPhysics").onclick = () => {
@@ -633,15 +645,36 @@ $("resetAllPhysics").onclick = () => {
   status("Физика всех слоёв сброшена к исходным настройкам.");
   rewindMedia();
 };
+const gustPhase = (f) => f.id * 7.131 + (f.gust || 0) * 11.317;
+function setGust(list, value) {
+  for (const f of list) {
+    f.gust = value(f);
+    f.options.phase = gustPhase(f);
+    f.cloth.reset();
+  }
+  touchSim();
+  sync();
+}
 $("newGust").onclick = () => {
   const list = selectedFlags();
   if (!list.length || busy) return;
-  for (const f of list) {
-    f.options.phase += 11.317 + Math.random() * 7;
-    f.cloth.reset();
+  setGust(list, (f) => (f.gust || 0) + 1);
+  status(list.length > 1 ? "У выбранных флагов новые порывы." : "Порыв № " + list[0].gust + ".");
+};
+$("gust").onchange = () => {
+  const list = selectedFlags(),
+    v = Math.round(+$("gust").value);
+  if (!list.length || busy || !Number.isFinite(v)) return;
+  setGust(list, () => Math.max(0, Math.min(9999, v)));
+};
+$("pinMode").onclick = (e) => {
+  const b = e.target.closest("button");
+  if (!b || busy) return;
+  for (const f of selectedFlags()) {
+    f.pin = b.dataset.value;
+    rebuildFlag(f);
   }
-  status(list.length > 1 ? "У выбранных флагов новые порывы." : "У выбранного флага новый порыв.");
-  draw();
+  sync();
 };
 $("resolution").onchange = () => {
   if (busy) return;
@@ -1148,12 +1181,6 @@ function play(value) {
 $("play").onclick = () => {
   if (!busy) play(!playing);
 };
-function step(dt = 1 / 60) {
-  resumeTimeline();
-  stepFlags(flags, dt, scene.globalWind ? scene.wind : null);
-  elapsed += dt;
-  recordFrame();
-}
 async function rewindMedia() {
   lock(true);
   try {
@@ -1168,6 +1195,7 @@ async function rewindMedia() {
 $("restart").onclick = () => {
   if (!busy) {
     for (const f of flags) f.cloth.reset();
+    touchSim();
     elapsed = 0;
     clearTimeline();
     rewindMedia();
@@ -1178,7 +1206,7 @@ $("step").onclick = async () => {
   play(false);
   lock(true);
   try {
-    step();
+    await stepAsync(1);
     await Promise.all(
       videos(flags.filter((f) => f.animationEnabled !== false)).map((v) =>
         seekVideo(v, v.currentTime + 1 / 60),
@@ -1276,14 +1304,13 @@ function loop(t) {
   const dt = last ? Math.min((t - last) / 1000, 0.06) : 1 / 60;
   last = t;
   if (playing && !pointer) {
-    accum += dt * scene.speed;
-    let n = 0;
-    while (accum >= 1 / 60 && n < 2) {
-      step();
-      accum -= 1 / 60;
-      n++;
+    accum = Math.min(accum + dt * scene.speed, 2 / 60);
+    const n = Math.floor(accum * 60 + 1e-9);
+    if (n && !stepping) {
+      accum = n >= 2 ? 0 : accum - n / 60;
+      stepping = true;
+      stepAsync(n).finally(() => (stepping = false));
     }
-    if (n === 2) accum = 0;
   }
   draw();
   updateTimeline();
@@ -1300,8 +1327,10 @@ document.addEventListener("visibilitychange", () => {
   last = 0;
   updateMedia();
 });
-function lock(v) {
+function lock(v, message = "") {
   busy = v;
+  touchSim();
+  showBusy(v ? message : "");
   updateMedia();
   document.body.classList.toggle("exporting", v);
   for (const el of document.querySelectorAll(
@@ -1357,7 +1386,7 @@ $("png").onclick = async () => {
 $("svg").onclick = async () => {
   if (busy || loading || !visible().length || visible().some((f) => !f.shapes)) return;
   cancel = false;
-  lock(true);
+  lock(true, "Фиксирую все флаги и рассчитываю SVG-композицию…");
   status("Фиксирую все флаги и рассчитываю SVG-композицию…");
   try {
     const snapshot = snapshotScene(flags);
@@ -1438,7 +1467,7 @@ async function exportSequence() {
   let bytes = 0;
   for (let frame = 0; frame < count; frame++) {
     if (cancel) throw new Error("Экспорт отменён.");
-    if (frame) for (let s = 0; s < 2; s++) step((1 / 60) * scene.speed);
+    if (frame) await stepAsync(2, (1 / 60) * scene.speed);
     await Promise.all([...starts].map(([v, time]) => seekVideo(v, time + (frame / 30) * scene.speed)));
     if (cancel) throw new Error("Экспорт отменён.");
     renderer.draw(flags, scene, w, h, true);
@@ -1494,10 +1523,10 @@ async function exportVideo() {
         const now = performance.now();
         acc += Math.min((now - previous) / 1000, 0.1) * scene.speed;
         previous = now;
-        let n = 0;
-        while (acc >= 1 / 60 && n++ < 6) {
-          step();
-          acc -= 1 / 60;
+        const n = Math.min(6, Math.floor(acc * 60));
+        if (n) {
+          acc -= n / 60;
+          await stepAsync(n);
         }
         renderer.draw(flags, opts, w, h, true);
         status(`Запись композиции: ${Math.min(duration, (now - start) / 1000).toFixed(1)} / ${duration} сек`);
@@ -1518,6 +1547,16 @@ async function exportVideo() {
     stream.getTracks().forEach((t) => t.stop());
   }
 }
+function cancelBusy() {
+  if (worker) {
+    worker.terminate();
+    worker = null;
+    lock(false);
+    draw();
+    status("SVG-экспорт отменён.");
+  } else if (busy) cancel = true;
+}
+$("busyCancel").onclick = cancelBusy;
 $("animate").onclick = async () => {
   if (worker) {
     worker.terminate();
@@ -1536,7 +1575,7 @@ $("animate").onclick = async () => {
   const saved = flags.map((f) => ({ f, p: f.cloth.p.slice(), v: f.cloth.v.slice(), time: f.cloth.time })),
     savedElapsed = elapsed,
     savedMedia = videos(flags).map((v) => [v, v.currentTime]);
-  lock(true);
+  lock(true, "Готовлю анимацию…");
   try {
     if ($("format").value === "zip") await exportSequence();
     else await exportVideo();
@@ -1549,6 +1588,7 @@ $("animate").onclick = async () => {
       f.cloth.time = time;
       f.cloth.computeNormals();
     }
+    touchSim();
     elapsed = savedElapsed;
     try {
       await Promise.all(savedMedia.map(([v, time]) => seekVideo(v, time)));
@@ -1560,6 +1600,133 @@ $("animate").onclick = async () => {
     }
   }
 };
+// ---------- Simulation: cloth steps run in a pool of background workers ----------
+const pool = { workers: [], ok: true, seq: 0, pending: new Map() };
+let simEpoch = 0,
+  stepping = false;
+const touchSim = () => simEpoch++;
+try {
+  const n = Math.max(1, Math.min(8, (navigator.hardwareConcurrency || 4) - 1));
+  for (let i = 0; i < n; i++) {
+    const w = new Worker("./physics-worker.mjs", { type: "module" });
+    w.onmessage = ({ data }) => {
+      pool.pending.get(data.seq)?.(data.out);
+      pool.pending.delete(data.seq);
+    };
+    w.onerror = () => {
+      pool.ok = false;
+      for (const resolve of pool.pending.values()) resolve(null);
+      pool.pending.clear();
+    };
+    pool.workers.push(w);
+  }
+} catch {
+  pool.ok = false;
+}
+function stepSync(steps, dt) {
+  const wind = scene.globalWind ? scene.wind : null;
+  for (let i = 0; i < steps; i++)
+    stepFlags(
+      flags.filter((f) => f.visible),
+      dt,
+      wind,
+    );
+}
+// Advances every visible, unpaused flag by `steps` fixed steps. Results that arrive after the
+// scene was changed on the page (reset, scrub, undo…) are dropped.
+async function stepAsync(steps = 1, dt = 1 / 60) {
+  resumeTimeline();
+  const epoch = simEpoch,
+    active = flags.filter((f) => f.visible && f.animationEnabled !== false);
+  if (!pool.ok || !pool.workers.length) stepSync(steps, dt);
+  else if (active.length) {
+    const wind = scene.globalWind ? scene.wind : null,
+      alive = flags.map((f) => f.id),
+      batches = pool.workers.map(() => []),
+      sent = new Map();
+    for (const f of active) {
+      const c = f.cloth,
+        params = [c.aspect, f.resolution, f.edge, f.pin || "edge"];
+      sent.set(f.id, c);
+      batches[f.id % batches.length].push({
+        id: f.id,
+        key: params.join("|"),
+        params,
+        options: wind ? { ...f.options, ...wind } : { ...f.options },
+        p: c.p.slice(),
+        v: c.v.slice(),
+        time: c.time,
+      });
+    }
+    const results = await Promise.all(
+      batches.map((jobs, i) =>
+        jobs.length
+          ? new Promise((resolve) => {
+              const seq = ++pool.seq;
+              pool.pending.set(seq, resolve);
+              pool.workers[i].postMessage(
+                { seq, jobs, steps, dt, alive },
+                jobs.flatMap((j) => [j.p.buffer, j.v.buffer]),
+              );
+            })
+          : [],
+      ),
+    );
+    if (results.some((r) => r === null)) {
+      if (epoch === simEpoch) stepSync(steps, dt);
+    } else {
+      if (epoch !== simEpoch) return false;
+      for (const o of results.flat()) {
+        const f = flags.find((x) => x.id === o.id);
+        if (!f || f.cloth !== sent.get(o.id) || f.cloth.p.length !== o.p.length) continue;
+        f.cloth.p.set(o.p);
+        f.cloth.v.set(o.v);
+        f.cloth.normals.set(o.normals);
+        f.cloth.time = o.time;
+      }
+    }
+  }
+  if (epoch !== simEpoch) return false;
+  elapsed += dt * steps;
+  recordFrame(steps);
+  return true;
+}
+// SVG flags keep their source image and are re-rasterized to match their size on the canvas:
+// small flags and solid rectangles use small textures, large flags stay sharp.
+const TEXTURE_STEPS = [64, 256, 512, 1024, 2048, 4096];
+function fitTextures() {
+  const used = new Map();
+  for (const f of flags) {
+    const src = f.svgImage;
+    if (!src) continue;
+    const aspect = src.width / src.height,
+      longSide = f.width * Math.max(1, 1 / aspect),
+      k = 1.5 * Math.max(1, 2160 / Math.max(scene.width, scene.height)),
+      wanted = f.rect ? 64 : TEXTURE_STEPS.find((s) => s >= longSide * k) || 4096;
+    src.textures ||= new Map();
+    if (!src.textures.has(wanted)) src.textures.set(wanted, rasterizeSVG(src, wanted));
+    f.image = src.textures.get(wanted);
+    if (!used.has(src)) used.set(src, new Set());
+    used.get(src).add(wanted);
+  }
+  for (const [src, sizes] of used) for (const size of [...src.textures.keys()]) if (!sizes.has(size)) src.textures.delete(size);
+}
+$("settle").onclick = async () => {
+  if (busy || loading || !flags.length) return;
+  cancel = false;
+  lock(true, "Проматываю симуляцию…");
+  try {
+    for (let i = 0; i < 6 && !cancel; i++) {
+      await stepAsync(30);
+      status(`Проматываю симуляцию: ${Math.round(((i + 1) / 6) * 100)}%`);
+    }
+    status("Промотано 3 секунды.");
+  } finally {
+    clearTimeline();
+    lock(false);
+    draw();
+  }
+};
 // ---------- Timeline: recent simulation frames for scrubbing ----------
 const timeline = { frames: [], bytes: 0, index: null, tick: 0 };
 function clearTimeline() {
@@ -1567,12 +1734,13 @@ function clearTimeline() {
   timeline.bytes = 0;
   timeline.index = null;
 }
-function recordFrame() {
-  if (busy || ++timeline.tick % 2) return;
+function recordFrame(steps = 1) {
+  if (busy || (timeline.tick += steps) < 2) return;
+  timeline.tick = 0;
   const states = new Map();
   let bytes = 0;
   for (const f of flags) {
-    if (f.animationEnabled === false) continue;
+    if (f.animationEnabled === false || !f.visible) continue;
     states.set(f.cloth, { p: f.cloth.p.slice(), time: f.cloth.time });
     bytes += f.cloth.p.byteLength;
   }
@@ -1590,6 +1758,7 @@ function applyFrame(i) {
     f.cloth.time = s.time;
     f.cloth.computeNormals();
   }
+  touchSim();
   elapsed = frame.elapsed;
   timeline.index = i;
   draw();
@@ -1635,7 +1804,7 @@ function stateKey() {
     scene.background,
     scene.globalWind,
     scene.wind,
-    flags.map((f) => [f.id, f.name, f.x, f.y, f.width, f.roll, f.edge, f.resolution, f.visible, f.animationEnabled, f.options]),
+    flags.map((f) => [f.id, flagProps(f)]),
   ]);
 }
 function takeSnapshot() {
@@ -1644,18 +1813,7 @@ function takeSnapshot() {
     scene: { width: scene.width, height: scene.height, background: scene.background, globalWind: scene.globalWind, wind: { ...scene.wind } },
     flags: flags.map((flag) => ({
       flag,
-      props: {
-        name: flag.name,
-        x: flag.x,
-        y: flag.y,
-        width: flag.width,
-        roll: flag.roll,
-        edge: flag.edge,
-        resolution: flag.resolution,
-        visible: flag.visible,
-        animationEnabled: flag.animationEnabled,
-        options: { ...flag.options },
-      },
+      props: flagProps(flag),
     })),
     selection: [...selection],
     selectedId,
@@ -1687,6 +1845,7 @@ function commit() {
     current.selectedId = selectedId;
     return;
   }
+  fitTextures();
   history.list.length = history.index + 1;
   history.list.push(takeSnapshot());
   if (history.list.length > 100) history.list.shift();
@@ -1705,7 +1864,8 @@ function applySnapshot(s) {
   $("sceneWidth").value = scene.width;
   $("sceneHeight").value = scene.height;
   flags = s.flags.map(({ flag, props }) => {
-    const rebuild = flag.edge !== props.edge || flag.resolution !== props.resolution;
+    const rebuild =
+      flag.edge !== props.edge || flag.resolution !== props.resolution || (flag.pin || "edge") !== (props.pin || "edge");
     Object.assign(flag, props, { options: { ...props.options } });
     if (rebuild) rebuildFlag(flag);
     return flag;
@@ -1751,16 +1911,7 @@ async function serializeProject() {
     }
     items.push({
       source: index.get(f.source.blob),
-      name: f.name,
-      x: f.x,
-      y: f.y,
-      width: f.width,
-      roll: f.roll,
-      edge: f.edge,
-      resolution: f.resolution,
-      visible: f.visible,
-      animationEnabled: f.animationEnabled,
-      options: { ...f.options },
+      ...flagProps(f),
       cloth: { p: f.cloth.p.slice(), v: f.cloth.v.slice(), time: f.cloth.time },
     });
   }
@@ -1819,12 +1970,9 @@ async function restoreProject(data) {
       const f = addImage(image, item.name, d.shapes, d.reason, { select: false });
       Object.assign(f, {
         source: d.source,
-        x: item.x,
-        y: item.y,
-        width: item.width,
+        svgImage: d.svgImage,
+        ...Object.fromEntries(FLAG_PROPS.filter((k) => item[k] !== undefined).map((k) => [k, item[k]])),
         roll: item.roll || 0,
-        edge: item.edge,
-        resolution: item.resolution,
         visible: item.visible !== false,
         animationEnabled: item.animationEnabled !== false,
         options: { ...clothDefaults, ...item.options },

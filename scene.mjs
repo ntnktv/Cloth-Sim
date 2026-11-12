@@ -23,6 +23,7 @@ export function makeFlag({ id, name, image, shapes = null, reason = "", scene, p
     cloth,
     resolution: 40,
     edge: "left",
+    pin: "edge",
     visible: true,
     animationEnabled: true,
     x: scene.width / 2,
@@ -36,7 +37,7 @@ export function makeFlag({ id, name, image, shapes = null, reason = "", scene, p
   };
 }
 export function rebuildFlag(flag) {
-  flag.cloth = new Cloth(flag.image.width / flag.image.height, flag.resolution, flag.edge);
+  flag.cloth = new Cloth(flag.image.width / flag.image.height, flag.resolution, flag.edge, flag.pin || "edge");
 }
 export function transformPoint(flag, x, y, z) {
   const cy = Math.cos(flag.yaw),
@@ -60,6 +61,35 @@ export function projectFlag(flag, scene) {
     pts.push([(2 * x) / scene.width - 1, 1 - (2 * y) / scene.height, z / depth]);
   }
   return pts;
+}
+// Same projection as projectFlag, written straight into a Float32Array for the renderer.
+export function projectFlagInto(flag, scene, out) {
+  const p = flag.cloth.p,
+    depth = Math.max(scene.width, scene.height),
+    cy = Math.cos(flag.yaw),
+    sy = Math.sin(flag.yaw),
+    cx = Math.cos(flag.pitch),
+    sx = Math.sin(flag.pitch),
+    cr = Math.cos(flag.roll),
+    sr = Math.sin(flag.roll),
+    scale = flag.width / flag.cloth.width;
+  let lo = Infinity,
+    hi = -Infinity;
+  for (let i = 0; i < p.length; i += 3) {
+    const X = cy * p[i] + sy * p[i + 2],
+      Z = -sy * p[i] + cy * p[i + 2],
+      Y = cx * p[i + 1] - sx * Z,
+      ZZ = sx * p[i + 1] + cx * Z,
+      x = flag.x + (cr * X - sr * Y) * scale,
+      y = flag.y - (sr * X + cr * Y) * scale,
+      z = (flag.z + ZZ * scale) / depth;
+    out[i] = (2 * x) / scene.width - 1;
+    out[i + 1] = 1 - (2 * y) / scene.height;
+    out[i + 2] = z;
+    if (z < lo) lo = z;
+    if (z > hi) hi = z;
+  }
+  return [lo, hi];
 }
 export function snapshotScene(flags) {
   return flags
@@ -123,6 +153,7 @@ export function resetAllPhysics(flags) {
     const phase = flag.options.phase;
     flag.options = { ...clothDefaults, phase };
     flag.edge = "left";
+    flag.pin = "edge";
     flag.resolution = 40;
     rebuildFlag(flag);
   }

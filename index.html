@@ -131,6 +131,7 @@ FLOW.</textarea>
     </div>
     <div id="dropOverlay">Отпустите, чтобы добавить</div>
     <div id="status" role="status" aria-live="polite"></div>
+    <div id="busyOverlay" hidden><div class="busy-card"><div class="spinner"></div><p id="busyText"></p><button type="button" id="busyCancel" class="pill">Отменить</button></div></div>
     <span class="mesh-info"><span id="meshInfo"></span> · <span id="fps"></span></span>
   </div>
 
@@ -139,6 +140,7 @@ FLOW.</textarea>
       <button id="play" class="play" aria-label="Пауза"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 3H7V13H4ZM9 3H12V13H9Z"/></svg></button>
       <button id="restart" class="ghost" title="Начать заново" aria-label="Начать все флаги заново">↺</button>
       <button id="step" class="ghost" title="Один кадр" aria-label="Один кадр">▷|</button>
+      <button id="settle" class="ghost" title="Промотать 3 секунды сразу" aria-label="Промотать 3 секунды">≫</button>
       <input id="timeline" class="timeline" type="range" min="0" max="0" value="0" step="1" disabled title="Перемотка: найдите удачный кадр и экспортируйте SVG" aria-label="Перемотка симуляции">
       <span id="time" class="time">00:00.00</span>
       <span id="liveLabel" hidden>Симуляция идёт</span>
@@ -222,6 +224,11 @@ FLOW.</textarea>
       <button data-value="right">справа</button>
       <button data-value="bottom">снизу</button>
     </div>
+    <div class="segments" id="pinMode" title="За что держится выбранный край">
+      <button data-value="edge" class="active">весь край</button>
+      <button data-value="corners">два угла</button>
+      <button data-value="point">одна точка</button>
+    </div>
   </div>
 
   <div class="group" id="windGroup">
@@ -256,6 +263,7 @@ FLOW.</textarea>
         <option value="56">56 · баланс</option>
         <option value="80">80 · точно</option>
       </select></label>
+      <label class="row" title="Номер порыва: одинаковый номер даёт то же движение">порыв №<span class="sec"><input id="gust" type="number" min="0" max="9999" step="1" value="0"></span></label>
     </div>
     <button id="newGust" class="pill wide">↻ другой порыв</button>
   </div>

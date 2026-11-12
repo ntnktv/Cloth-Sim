@@ -1,4 +1,4 @@
-import { projectFlag } from "./scene.mjs";
+import { projectFlagInto } from "./scene.mjs";
 export class Renderer {
   constructor(canvas) {
     this.canvas = canvas;
@@ -146,26 +146,26 @@ export class Renderer {
     gl.useProgram(this.program);
     // Layers are painted strictly in array order (back to front). Depth is tested only inside
     // one flag, so its own folds overlap correctly while different flags never intersect.
-    const visible = flags.filter((f) => f.visible).map((f) => ({ f, points: projectFlag(f, o) }));
-    const depthRange = (points) => {
-      let lo = Infinity,
-        hi = -Infinity;
-      for (const p of points) {
-        lo = Math.min(lo, p[2]);
-        hi = Math.max(hi, p[2]);
-      }
+    const visible = flags
+      .filter((f) => f.visible)
+      .map((f) => {
+        const b = this.mesh(f.cloth);
+        if (!b.points) b.points = new Float32Array(f.cloth.p.length);
+        return { f, points: b.points, range: projectFlagInto(f, o, b.points) };
+      });
+    const depthRange = ([lo, hi]) => {
       gl.uniform1f(this.uniform.depthCenter, (lo + hi) / 2);
       gl.uniform1f(this.uniform.depthSpan, Math.max(1e-6, ((hi - lo) / 2) * 1.02));
       gl.clear(gl.DEPTH_BUFFER_BIT);
     };
     gl.uniform1f(this.uniform.shade, o.shade ? 1 : 0);
     gl.uniform1i(this.uniform.artwork, 0);
-    for (const { f, points } of visible) {
+    for (const { f, points, range } of visible) {
       const b = this.mesh(f.cloth);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, this.texture(f.image));
       for (const [n, data, size] of [
-        ["position", new Float32Array(points.flat()), 3],
+        ["position", points, 3],
         ["normal", f.cloth.normals, 3],
         ["uv", null, 2],
       ]) {
@@ -175,17 +175,17 @@ export class Renderer {
         gl.vertexAttribPointer(this.attrib[n], size, gl.FLOAT, false, 0, 0);
       }
       gl.uniform1f(this.uniform.wire, 0);
-      depthRange(points);
+      depthRange(range);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, b.tri);
       gl.drawElements(gl.TRIANGLES, f.cloth.tri.length, gl.UNSIGNED_SHORT, 0);
     }
     if (o.wire && !exporting) {
       gl.uniform1f(this.uniform.wire, 1);
-      for (const { f, points } of visible) {
+      for (const { f, points, range } of visible) {
         const b = this.mesh(f.cloth);
         gl.bindTexture(gl.TEXTURE_2D, this.texture(f.image));
         for (const [n, data, size] of [
-          ["position", new Float32Array(points.flat()), 3],
+          ["position", points, 3],
           ["normal", f.cloth.normals, 3],
           ["uv", null, 2],
         ]) {
@@ -193,7 +193,7 @@ export class Renderer {
           if (data) gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
           gl.vertexAttribPointer(this.attrib[n], size, gl.FLOAT, false, 0, 0);
         }
-        depthRange(points);
+        depthRange(range);
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, b.lines);
         gl.drawElements(gl.LINES, b.lineCount, gl.UNSIGNED_SHORT, 0);
       }

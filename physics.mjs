@@ -1,7 +1,18 @@
+// Table sine with linear interpolation (error < 1e-6): the wind field calls it for every triangle.
+const SIN_N = 8192,
+  SIN_TABLE = Float64Array.from({ length: SIN_N + 1 }, (_, i) => Math.sin((i / SIN_N) * 2 * Math.PI)),
+  SIN_K = SIN_N / (2 * Math.PI);
+function sin(x) {
+  let u = x * SIN_K;
+  u -= Math.floor(u / SIN_N) * SIN_N;
+  const i = u | 0;
+  return SIN_TABLE[i] + (SIN_TABLE[i + 1] - SIN_TABLE[i]) * (u - i);
+}
 // Fixed-step XPBD cloth. Wind is a force field, not a geometric deformation.
 export class Cloth {
-  constructor(aspect = 1.6, resolution = 56, edge = "left") {
+  constructor(aspect = 1.6, resolution = 56, edge = "left", pin = "edge") {
     this.edge = edge;
+    this.pin = pin;
     this.aspect = aspect;
     // Very long flags get extra cells along the long side so folds stay smooth (unchanged up to 4:1).
     const ratio = Math.max(aspect, 1 / aspect),
@@ -30,13 +41,17 @@ export class Cloth {
         this.rest[i * 3 + 1] = (0.5 - y / this.ny) * this.height;
         this.uv[i * 2] = x / this.nx;
         this.uv[i * 2 + 1] = y / this.ny;
-        this.inv[i] =
-          (edge === "left" && x === 0) ||
-          (edge === "right" && x === this.nx) ||
-          (edge === "top" && y === 0) ||
-          (edge === "bottom" && y === this.ny)
-            ? 0
-            : 1;
+        // pin: whole edge, its two corners, or its middle point.
+        const onEdge =
+            (edge === "left" && x === 0) ||
+            (edge === "right" && x === this.nx) ||
+            (edge === "top" && y === 0) ||
+            (edge === "bottom" && y === this.ny),
+          vertical = edge === "left" || edge === "right",
+          t = vertical ? y : x,
+          n = vertical ? this.ny : this.nx,
+          picked = pin === "corners" ? t === 0 || t === n : pin === "point" ? t === Math.round(n / 2) : true;
+        this.inv[i] = onEdge && picked ? 0 : 1;
       }
     for (let y = 0; y <= this.ny; y++)
       for (let x = 0; x <= this.nx; x++) {
@@ -56,6 +71,14 @@ export class Cloth {
       }
     this.tri = new Uint16Array(tris);
     this.links = links;
+    // Flat typed copies of the constraints for the solver's hot loop.
+    this.linkA = Uint32Array.from(links, (l) => l[0] * 3);
+    this.linkB = Uint32Array.from(links, (l) => l[1] * 3);
+    this.linkLength = Float64Array.from(links, (l) => l[2]);
+    this.linkBend = Uint8Array.from(links, (l) => l[3]);
+    this.linkW = Float32Array.from(links, (l) => this.inv[l[0]] + this.inv[l[1]]);
+    this.inv3A = Float32Array.from(links, (l) => this.inv[l[0]]);
+    this.inv3B = Float32Array.from(links, (l) => this.inv[l[1]]);
     this.lambda = new Float32Array(links.length);
     this.reset();
   }
@@ -83,14 +106,18 @@ export class Cloth {
       const nx = y * Z - z * Y,
         ny = z * X - x * Z,
         nz = x * Y - y * X;
-      for (const i of [a, b, c]) {
-        n[i] += nx;
-        n[i + 1] += ny;
-        n[i + 2] += nz;
-      }
+      n[a] += nx;
+      n[a + 1] += ny;
+      n[a + 2] += nz;
+      n[b] += nx;
+      n[b + 1] += ny;
+      n[b + 2] += nz;
+      n[c] += nx;
+      n[c + 1] += ny;
+      n[c + 2] += nz;
     }
     for (let i = 0; i < n.length; i += 3) {
-      const l = Math.hypot(n[i], n[i + 1], n[i + 2]) || 1;
+      const l = Math.sqrt(n[i] * n[i] + n[i + 1] * n[i + 1] + n[i + 2] * n[i + 2]) || 1;
       n[i] /= l;
       n[i + 1] /= l;
       n[i + 2] /= l;
@@ -128,7 +155,7 @@ export class Cloth {
       let nx = ey * fz - ez * fy,
         ny = ez * fx - ex * fz,
         nz = ex * fy - ey * fx;
-      const len = Math.hypot(nx, ny, nz);
+      const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
       if (len < 1e-9) continue;
       nx /= len;
       ny /= len;
@@ -139,25 +166,33 @@ export class Cloth {
         along = x * dir[0] + y * dir[1],
         across = x * dir[1] - y * dir[0],
         phase = along * 2.8 - t * (1.4 + speed * 0.35),
-        gust = 1 + o.turbulence * 0.22 * Math.sin(t * 1.7 + along * 1.1),
+        gust = 1 + o.turbulence * 0.22 * sin(t * 1.7 + along * 1.1),
         eddy =
           o.turbulence *
-          (Math.sin(phase + Math.sin(across * 2.1 + t * 0.6)) * 0.6 +
-            Math.sin(phase * 1.71 + across * 3.4 - t * 0.8) * 0.3 +
-            Math.sin(x * 7 + y * 5 + z * 2 - t * 4.3) * 0.1);
+          (sin(phase + sin(across * 2.1 + t * 0.6)) * 0.6 +
+            sin(phase * 1.71 + across * 3.4 - t * 0.8) * 0.3 +
+            sin(x * 7 + y * 5 + z * 2 - t * 4.3) * 0.1);
       const ux = speed * (wx * gust + dir[1] * eddy * 0.16) - (v[a] + v[b] + v[c]) / 3,
         uy = speed * (wy * gust - dir[0] * eddy * 0.16) - (v[a + 1] + v[b + 1] + v[c + 1]) / 3,
         uz = speed * (wz * gust + eddy * 0.55) - (v[a + 2] + v[b + 2] + v[c + 2]) / 3,
         dot = ux * nx + uy * ny + uz * nz,
         pressure = Math.max(-90, Math.min(90, dot * Math.abs(dot) * 0.75)),
         scale = len / (6 * area) / Math.max(0.25, o.mass);
-      for (const i of [a, b, c]) {
-        f[i] += (nx * pressure + ux * 0.24) * scale;
-        f[i + 1] += (ny * pressure + uy * 0.24) * scale;
-        f[i + 2] += (nz * pressure + uz * 0.24) * scale;
-      }
+      const gx = (nx * pressure + ux * 0.24) * scale,
+        gy = (ny * pressure + uy * 0.24) * scale,
+        gz = (nz * pressure + uz * 0.24) * scale;
+      f[a] += gx;
+      f[a + 1] += gy;
+      f[a + 2] += gz;
+      f[b] += gx;
+      f[b + 1] += gy;
+      f[b + 2] += gz;
+      f[c] += gx;
+      f[c + 1] += gy;
+      f[c + 2] += gz;
     }
-    this.old.set(p);
+    const old = this.old;
+    old.set(p);
     const damp = Math.exp(-o.damping * h);
     for (let i = 0; i < this.count; i++) {
       const j = i * 3;
@@ -165,36 +200,48 @@ export class Cloth {
       v[j] = (v[j] + f[j] * h) * damp;
       v[j + 1] = (v[j + 1] + (f[j + 1] - o.gravity) * h) * damp;
       v[j + 2] = (v[j + 2] + f[j + 2] * h) * damp;
-      for (let k = 0; k < 3; k++) p[j + k] += v[j + k] * h;
+      p[j] += v[j] * h;
+      p[j + 1] += v[j + 1] * h;
+      p[j + 2] += v[j + 2] * h;
     }
     this.lambda.fill(0);
     const bend = (0.0000005 + Math.pow(1 - o.stiffness, 3) * 0.00012) / (h * h),
       stretch = 0.000000005 / (h * h);
+    const LA = this.linkA,
+      LB = this.linkB,
+      LL = this.linkLength,
+      LBend = this.linkBend,
+      LW = this.linkW,
+      IA = this.inv3A,
+      IB = this.inv3B,
+      lambda = this.lambda,
+      count = LA.length;
     for (let iter = 0; iter < 8; iter++)
-      for (let q = 0; q < this.links.length; q++) {
-        const k = iter % 2 ? this.links.length - 1 - q : q,
-          [a, b, l, isBend] = this.links[k],
-          w = inv[a] + inv[b];
+      for (let q = 0; q < count; q++) {
+        const k = iter % 2 ? count - 1 - q : q,
+          w = LW[k];
         if (!w) continue;
-        const A = a * 3,
-          B = b * 3,
+        const A = LA[k],
+          B = LB[k],
           x = p[B] - p[A],
           y = p[B + 1] - p[A + 1],
           z = p[B + 2] - p[A + 2],
           d = Math.sqrt(x * x + y * y + z * z);
         if (d < 1e-9) continue;
-        const alpha = isBend ? bend : stretch,
-          dl = (-(d - l) - alpha * this.lambda[k]) / (w + alpha);
-        this.lambda[k] += dl;
+        const alpha = LBend[k] ? bend : stretch,
+          dl = (-(d - LL[k]) - alpha * lambda[k]) / (w + alpha);
+        lambda[k] += dl;
         const sx = (x / d) * dl,
           sy = (y / d) * dl,
-          sz = (z / d) * dl;
-        p[A] -= inv[a] * sx;
-        p[A + 1] -= inv[a] * sy;
-        p[A + 2] -= inv[a] * sz;
-        p[B] += inv[b] * sx;
-        p[B + 1] += inv[b] * sy;
-        p[B + 2] += inv[b] * sz;
+          sz = (z / d) * dl,
+          ia = IA[k],
+          ib = IB[k];
+        p[A] -= ia * sx;
+        p[A + 1] -= ia * sy;
+        p[A + 2] -= ia * sz;
+        p[B] += ib * sx;
+        p[B + 1] += ib * sy;
+        p[B + 2] += ib * sz;
       }
     if (o.collision) this.collide();
     for (let i = 0; i < this.count; i++) {
@@ -206,7 +253,9 @@ export class Cloth {
         v[j] = v[j + 1] = v[j + 2] = 0;
         continue;
       }
-      for (let k = 0; k < 3; k++) v[j + k] = (p[j + k] - this.old[j + k]) / h;
+      v[j] = (p[j] - old[j]) / h;
+      v[j + 1] = (p[j + 1] - old[j + 1]) / h;
+      v[j + 2] = (p[j + 2] - old[j + 2]) / h;
     }
   }
   collide() {
