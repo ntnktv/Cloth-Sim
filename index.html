@@ -78,6 +78,20 @@ FLOW.</textarea>
     </form>
 
 
+    <div class="bar history">
+      <button type="button" id="undo" class="ghost" title="Отменить · Cmd/Ctrl+Z" aria-label="Отменить" disabled>↶</button>
+      <button type="button" id="redo" class="ghost" title="Вернуть · Cmd/Ctrl+Shift+Z" aria-label="Вернуть" disabled>↷</button>
+    </div>
+    <details class="export" id="projectMenu">
+      <summary class="pill">Проект</summary>
+      <div class="popover">
+        <p class="muted">Сцена автоматически сохраняется в этом браузере. Файл .cloth можно передать коллеге.</p>
+        <button type="button" id="saveProject" class="pill wide">Сохранить файл .cloth</button>
+        <button type="button" id="openProject" class="pill wide">Открыть файл…</button>
+        <input type="file" id="projectFile" accept=".cloth,application/json" hidden>
+        <button type="button" id="newProject" class="pill wide">Очистить сцену</button>
+      </div>
+    </details>
     <details class="export" id="exportMenu">
       <summary class="primary">Экспорт</summary>
       <div class="popover">
@@ -125,6 +139,7 @@ FLOW.</textarea>
       <button id="play" class="play" aria-label="Пауза"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 3H7V13H4ZM9 3H12V13H9Z"/></svg></button>
       <button id="restart" class="ghost" title="Начать заново" aria-label="Начать все флаги заново">↺</button>
       <button id="step" class="ghost" title="Один кадр" aria-label="Один кадр">▷|</button>
+      <input id="timeline" class="timeline" type="range" min="0" max="0" value="0" step="1" disabled title="Перемотка: найдите удачный кадр и экспортируйте SVG" aria-label="Перемотка симуляции">
       <span id="time" class="time">00:00.00</span>
       <span id="liveLabel" hidden>Симуляция идёт</span>
       <select id="speed" aria-label="Скорость">
@@ -172,17 +187,13 @@ FLOW.</textarea>
       <div class="grid2">
         <label class="field"><span>x</span><input id="posX" type="number" step="1"></label>
         <label class="field"><span>y</span><input id="posY" type="number" step="1"></label>
-        <label class="field span2"><span>ширина</span><input id="objectWidth" type="number" min="1" max="100000" step="1" title="Ширина, px"></label>
+        <label class="field"><span>ш</span><input id="objectWidth" type="number" min="1" max="100000" step="1" title="Ширина, px"></label>
+        <label class="field" title="Поворот, °"><span>↻</span><input id="roll" type="number" min="-360" max="360" step="1"></label>
       </div>
-      <div class="grid3">
-        <label class="field" title="Поворот в плоскости"><span>↻</span><input id="roll" type="number" min="-360" max="360" step="1"></label>
-        <label class="field" title="Поворот вокруг Y"><span>y°</span><input id="yaw" type="number" min="-180" max="180" step="1"></label>
-        <label class="field" title="Поворот вокруг X"><span>x°</span><input id="pitch" type="number" min="-180" max="180" step="1"></label>
-      </div>
+
       <div class="row-buttons">
         <button id="layerDown" class="chip" title="На слой ниже · Cmd/Ctrl + [">слой ↓</button>
         <button id="layerUp" class="chip" title="На слой выше · Cmd/Ctrl + ]">слой ↑</button>
-        <button id="front" class="chip" title="Сбросить повороты">0°</button>
       </div>
     </div>
   </div>
@@ -263,8 +274,8 @@ FLOW.</textarea>
 <h3>Физика</h3>
 <p>Ветер по умолчанию общий для всей сцены (переключатель в разделе «Ветер»); у каждого флага при этом своя фаза порывов. Крепление и ткань настраиваются для выбранных флагов. «Другой порыв» меняет его движение; дубликат получает собственный порыв. Общая пауза останавливает сцену, продолжение и шаг кадра действуют только на включённые слои. ↺ в панели слоёв возвращает исходную физику всех флагов, сохраняя положение и размеры. Физических столкновений разных флагов нет; самоколлизия одного флага экспериментальная.</p>
 <h3>Экспорт</h3>
-<p>SVG учитывает перекрытия между флагами и внутри складок. Для SVG нужны векторные заливки у всех видимых флагов: текст и обводки переведите в кривые, видео и растр скройте. Длина анимации — от 1 до 60 секунд. PNG-секвенция — 30 кадров/с с прозрачностью в ZIP; видео пишется с фоном в реальном времени. MP4 до 250 МБ, лучше H.264.</p>
-<p class="muted">Space — пауза · стрелки — сдвиг (Shift ×10) · Cmd/Ctrl+A — выделить всё · Cmd/Ctrl+D — копия · Delete — удалить · Cmd/Ctrl+[ ] — слой ниже/выше. Всё считается на вашем устройстве, сцена не сохраняется после перезагрузки.</p>
+<p>Ползунок рядом с паузой — перемотка: симуляция помнит последние секунды, можно вернуться к удачной складке и экспортировать SVG именно этого кадра. В окне проверки SVG можно скачать или скопировать и вставить прямо в Figma. SVG учитывает перекрытия между флагами и внутри складок. Для SVG нужны векторные заливки у всех видимых флагов: текст и обводки переведите в кривые, видео и растр скройте. Длина анимации — от 1 до 60 секунд. PNG-секвенция — 30 кадров/с с прозрачностью в ZIP; видео пишется с фоном в реальном времени. MP4 до 250 МБ, лучше H.264.</p>
+<p class="muted">Space — пауза · стрелки — сдвиг (Shift ×10) · Cmd/Ctrl+A — выделить всё · Cmd/Ctrl+Z — отмена · Cmd/Ctrl+D — копия · Delete — удалить · Cmd/Ctrl+[ ] — слой ниже/выше. Всё считается на вашем устройстве; сцена автоматически сохраняется в этом браузере.</p>
 </dialog>
 
 <dialog id="vectorDialog" class="vector-dialog">
@@ -275,7 +286,7 @@ FLOW.</textarea>
   <figure><figcaption>PNG · текущая сетка</figcaption><div class="compare-image checker"><img id="rasterImage" alt="Растровый кадр для сравнения"></div></figure>
   <figure><figcaption>SVG · векторные контуры</figcaption><div class="compare-image checker"><img id="vectorImage" alt="Результат векторного экспорта"></div></figure>
 </div>
-<a id="downloadVector" class="primary" download="cloth-composition.svg">Скачать SVG</a>
+<div class="dialog-actions"><a id="downloadVector" class="primary" download="cloth-composition.svg">Скачать SVG</a><button type="button" id="copyVector" class="pill">Копировать SVG</button><span class="muted">после копирования вставьте в Figma: Cmd/Ctrl+V</span></div>
 </dialog>
 
 <script type="module" src="app.mjs"></script>

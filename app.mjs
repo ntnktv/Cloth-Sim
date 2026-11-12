@@ -58,6 +58,7 @@ let flags = [],
   frames = 0,
   fpsStart = 0,
   vectorURL = null,
+  vectorText = "",
   rasterURL = null;
 const selectedFlags = () => flags.filter((f) => selection.has(f.id)),
   selected = () => (selection.size === 1 ? flags.find((f) => f.id === selectedId) : undefined),
@@ -334,14 +335,14 @@ function sync() {
         windDir.value
       ] ?? "");
   if (none) {
-    for (const id of ["posX", "posY", "objectWidth", "yaw", "pitch", "roll"]) setField(id, []);
+    for (const id of ["posX", "posY", "objectWidth", "roll"]) setField(id, []);
     draw();
     return;
   }
   setField("posX", list.map((x) => x.x));
   setField("posY", list.map((x) => x.y));
   setField("objectWidth", list.map((x) => x.width));
-  for (const key of ["yaw", "pitch", "roll"])
+  for (const key of ["roll"])
     setField(key, list.map((x) => (x[key] * 180) / Math.PI), 10);
   $("resolution").value = sameValue(list.map((x) => x.resolution)).value;
   const collision = sameValue(list.map((x) => !!x.options.collision));
@@ -381,7 +382,10 @@ function addImage(image, name, shapes, reason = "", { above = null, select = tru
   f.x += offset;
   f.y += offset;
   Object.assign(f, makeAlpha(image));
-  if (isVideo(image)) f.alpha = null;
+  if (isVideo(image)) {
+    f.alpha = null;
+    knownVideos.add(image);
+  }
   const index = above ? flags.indexOf(above) + 1 : flags.length;
   flags.splice(index > 0 ? index : flags.length, 0, f);
   if (select) setSelection([id]);
@@ -464,7 +468,9 @@ async function loadFiles(files) {
     try {
       const { image, shapes, reason } = await decodeFile(file);
       const name = file.name.startsWith("Прямоугольник") ? file.name.replace(/\.svg$/i, "") : file.name;
-      addedIds.push(addImage(image, name, shapes, reason, { select: false }).id);
+      const flag = addImage(image, name, shapes, reason, { select: false });
+      flag.source = { name: file.name, blob: file };
+      addedIds.push(flag.id);
       added++;
       if (reason) errors.push(file.name + ": " + reason);
     } catch (e) {
@@ -476,6 +482,7 @@ async function loadFiles(files) {
   sync();
   status(`Добавлено флагов: ${added}. ` + errors.join(" "));
   $("file").value = "";
+  scheduleCommit(0);
 }
 $("file").onchange = (e) => loadFiles([...e.target.files]);
 $("demo").onclick = () => loadFiles([new File([vectorDemo], "Демо-флаг.svg", { type: "image/svg+xml" })]);
@@ -492,6 +499,7 @@ $("duplicate").onclick = async () => {
         if (isVideo(image)) image = await cloneVideo(image);
         const copy = addImage(image, f.name + " — копия", f.shapes, f.reason, { above: f, select: false });
         Object.assign(copy, {
+          source: f.source,
           animationEnabled: f.animationEnabled,
           edge: f.edge,
           resolution: f.resolution,
@@ -522,6 +530,7 @@ $("duplicate").onclick = async () => {
     loading = false;
     sync();
     updateMedia();
+    scheduleCommit(0);
   }
 };
 function deleteSelection() {
@@ -530,8 +539,6 @@ function deleteSelection() {
     first = shown.findIndex((f) => selection.has(f.id)),
     removed = flags.filter((f) => selection.has(f.id));
   flags = flags.filter((f) => !selection.has(f.id));
-  for (const r of removed)
-    if (isVideo(r.image) && !flags.some((f) => f.image === r.image)) disposeVideo(r.image);
   const rest = [...flags].reverse(),
     next = rest[Math.min(first, rest.length - 1)];
   setSelection(next ? [next.id] : []);
@@ -549,8 +556,6 @@ for (const [id, key] of [
   ["posX", "x"],
   ["posY", "y"],
   ["objectWidth", "width"],
-  ["yaw", "yaw"],
-  ["pitch", "pitch"],
   ["roll", "roll"],
 ])
   $(id).oninput = () => {
@@ -569,11 +574,6 @@ for (const [id, key] of [
   };
 $("layerUp").onclick = () => shiftLayers(1);
 $("layerDown").onclick = () => shiftLayers(-1);
-$("front").onclick = () => {
-  if (busy) return;
-  for (const f of selectedFlags()) f.yaw = f.pitch = f.roll = 0;
-  sync();
-};
 $("pin").onclick = (e) => {
   const b = e.target.closest("button");
   if (!b || busy) return;
@@ -624,6 +624,7 @@ $("resetParams").onclick = () => {
 $("resetAllPhysics").onclick = () => {
   if (busy || loading || pointer || !flags.length) return;
   resetAllPhysics(flags);
+  clearTimeline();
   for (const key of windKeys) scene.wind[key] = clothDefaults[key];
   elapsed = 0;
   last = 0;
@@ -1148,8 +1149,10 @@ $("play").onclick = () => {
   if (!busy) play(!playing);
 };
 function step(dt = 1 / 60) {
+  resumeTimeline();
   stepFlags(flags, dt, scene.globalWind ? scene.wind : null);
   elapsed += dt;
+  recordFrame();
 }
 async function rewindMedia() {
   lock(true);
@@ -1166,6 +1169,7 @@ $("restart").onclick = () => {
   if (!busy) {
     for (const f of flags) f.cloth.reset();
     elapsed = 0;
+    clearTimeline();
     rewindMedia();
   }
 };
@@ -1215,6 +1219,12 @@ window.addEventListener("keydown", (e) => {
   } else if ((e.key === "Delete" || e.key === "Backspace") && list.length) {
     e.preventDefault();
     deleteSelection();
+  } else if (mod && e.code === "KeyZ") {
+    e.preventDefault();
+    undo(e.shiftKey ? 1 : -1);
+  } else if (mod && e.code === "KeyY") {
+    e.preventDefault();
+    undo(1);
   } else if (mod && e.code === "KeyA") {
     e.preventDefault();
     setSelection(flags.map((f) => f.id));
@@ -1276,6 +1286,7 @@ function loop(t) {
     if (n === 2) accum = 0;
   }
   draw();
+  updateTimeline();
   $("time").textContent =
     String(Math.floor(elapsed / 60)).padStart(2, "0") + ":" + (elapsed % 60).toFixed(2).padStart(5, "0");
   frames++;
@@ -1300,6 +1311,7 @@ function lock(v) {
   last = 0;
   accum = 0;
   updateButtons();
+  updateHistoryButtons();
 }
 function download(blob, name) {
   const url = URL.createObjectURL(blob),
@@ -1384,6 +1396,7 @@ $("svg").onclick = async () => {
         return;
       }
       const result = data.result;
+      vectorText = result.text;
       if (vectorURL) URL.revokeObjectURL(vectorURL);
       const file = new Blob([result.text], { type: "image/svg+xml" });
       vectorURL = URL.createObjectURL(file);
@@ -1547,6 +1560,427 @@ $("animate").onclick = async () => {
     }
   }
 };
+// ---------- Timeline: recent simulation frames for scrubbing ----------
+const timeline = { frames: [], bytes: 0, index: null, tick: 0 };
+function clearTimeline() {
+  timeline.frames = [];
+  timeline.bytes = 0;
+  timeline.index = null;
+}
+function recordFrame() {
+  if (busy || ++timeline.tick % 2) return;
+  const states = new Map();
+  let bytes = 0;
+  for (const f of flags) {
+    if (f.animationEnabled === false) continue;
+    states.set(f.cloth, { p: f.cloth.p.slice(), time: f.cloth.time });
+    bytes += f.cloth.p.byteLength;
+  }
+  timeline.frames.push({ elapsed, states, bytes });
+  timeline.bytes += bytes;
+  while (timeline.frames.length > 900 || timeline.bytes > 96e6) timeline.bytes -= timeline.frames.shift().bytes;
+}
+function applyFrame(i) {
+  const frame = timeline.frames[i];
+  if (!frame) return;
+  for (const f of flags) {
+    const s = frame.states.get(f.cloth);
+    if (!s) continue;
+    f.cloth.p.set(s.p);
+    f.cloth.time = s.time;
+    f.cloth.computeNormals();
+  }
+  elapsed = frame.elapsed;
+  timeline.index = i;
+  draw();
+}
+// Continue the simulation from the scrubbed frame: velocities come from the previous frame.
+function resumeTimeline() {
+  const i = timeline.index;
+  if (i == null) return;
+  timeline.index = null;
+  const frame = timeline.frames[i],
+    prev = timeline.frames[i - 1],
+    dt = prev ? frame.elapsed - prev.elapsed : 0;
+  for (const f of flags) {
+    const s = frame?.states.get(f.cloth);
+    if (!s) continue;
+    const q = dt > 1e-6 ? prev.states.get(f.cloth) : null;
+    if (q) for (let k = 0; k < s.p.length; k++) f.cloth.v[k] = (s.p[k] - q.p[k]) / dt;
+    else f.cloth.v.fill(0);
+  }
+  for (const dropped of timeline.frames.splice(i + 1)) timeline.bytes -= dropped.bytes;
+}
+function updateTimeline() {
+  const t = $("timeline"),
+    max = Math.max(0, timeline.frames.length - 1);
+  t.disabled = busy || max < 1;
+  if (+t.max !== max) t.max = max;
+  const value = timeline.index ?? max;
+  if (+t.value !== value) t.value = value;
+}
+$("timeline").oninput = () => {
+  if (busy) return;
+  if (playing) play(false);
+  applyFrame(+$("timeline").value);
+};
+
+// ---------- Undo / redo ----------
+const history = { list: [], index: -1, timer: 0 },
+  knownVideos = new Set();
+function stateKey() {
+  return JSON.stringify([
+    scene.width,
+    scene.height,
+    scene.background,
+    scene.globalWind,
+    scene.wind,
+    flags.map((f) => [f.id, f.name, f.x, f.y, f.width, f.roll, f.edge, f.resolution, f.visible, f.animationEnabled, f.options]),
+  ]);
+}
+function takeSnapshot() {
+  return {
+    key: stateKey(),
+    scene: { width: scene.width, height: scene.height, background: scene.background, globalWind: scene.globalWind, wind: { ...scene.wind } },
+    flags: flags.map((flag) => ({
+      flag,
+      props: {
+        name: flag.name,
+        x: flag.x,
+        y: flag.y,
+        width: flag.width,
+        roll: flag.roll,
+        edge: flag.edge,
+        resolution: flag.resolution,
+        visible: flag.visible,
+        animationEnabled: flag.animationEnabled,
+        options: { ...flag.options },
+      },
+    })),
+    selection: [...selection],
+    selectedId,
+  };
+}
+function gcVideos() {
+  const used = new Set(flags.map((f) => f.image));
+  for (const s of history.list) for (const { flag } of s.flags) used.add(flag.image);
+  for (const v of knownVideos)
+    if (!used.has(v)) {
+      disposeVideo(v);
+      knownVideos.delete(v);
+    }
+}
+function updateHistoryButtons() {
+  $("undo").disabled = busy || history.index <= 0;
+  $("redo").disabled = busy || history.index >= history.list.length - 1;
+}
+function scheduleCommit(delay = 350) {
+  clearTimeout(history.timer);
+  history.timer = setTimeout(commit, delay);
+}
+function commit() {
+  clearTimeout(history.timer);
+  if (busy || loading || pointer) return scheduleCommit();
+  const current = history.list[history.index];
+  if (current?.key === stateKey()) {
+    current.selection = [...selection];
+    current.selectedId = selectedId;
+    return;
+  }
+  history.list.length = history.index + 1;
+  history.list.push(takeSnapshot());
+  if (history.list.length > 100) history.list.shift();
+  history.index = history.list.length - 1;
+  gcVideos();
+  updateHistoryButtons();
+  scheduleAutosave();
+}
+function resetHistory() {
+  history.list = [];
+  history.index = -1;
+  commit();
+}
+function applySnapshot(s) {
+  Object.assign(scene, s.scene, { wind: { ...s.scene.wind } });
+  $("sceneWidth").value = scene.width;
+  $("sceneHeight").value = scene.height;
+  flags = s.flags.map(({ flag, props }) => {
+    const rebuild = flag.edge !== props.edge || flag.resolution !== props.resolution;
+    Object.assign(flag, props, { options: { ...props.options } });
+    if (rebuild) rebuildFlag(flag);
+    return flag;
+  });
+  setSelection(
+    s.selection.filter((id) => flags.some((f) => f.id === id)),
+    s.selectedId,
+  );
+  setBackground(scene.background);
+  sync();
+  layout();
+  updateMedia();
+  updateHistoryButtons();
+  scheduleAutosave();
+}
+function undo(direction = -1) {
+  if (busy || loading || pointer) return;
+  commit();
+  const target = history.list[history.index + direction];
+  if (!target) return;
+  history.index += direction;
+  applySnapshot(target);
+  status(direction < 0 ? "Отменено." : "Возвращено.");
+}
+$("undo").onclick = () => undo(-1);
+$("redo").onclick = () => undo(1);
+for (const type of ["pointerup", "keyup", "change", "input"])
+  document.addEventListener(type, () => scheduleCommit(), true);
+
+// ---------- Project: autosave in the browser and .cloth files ----------
+const canvasBlob = (c) => new Promise((resolve) => c.toBlob(resolve, "image/png"));
+async function serializeProject() {
+  const sources = [],
+    index = new Map(),
+    items = [];
+  for (const f of flags) {
+    if (!f.source && f.image instanceof HTMLCanvasElement)
+      f.source = { name: "Растровый текст.png", blob: await canvasBlob(f.image) };
+    if (!f.source?.blob) continue;
+    if (!index.has(f.source.blob)) {
+      index.set(f.source.blob, sources.length);
+      sources.push({ name: f.source.name, type: f.source.blob.type, blob: f.source.blob });
+    }
+    items.push({
+      source: index.get(f.source.blob),
+      name: f.name,
+      x: f.x,
+      y: f.y,
+      width: f.width,
+      roll: f.roll,
+      edge: f.edge,
+      resolution: f.resolution,
+      visible: f.visible,
+      animationEnabled: f.animationEnabled,
+      options: { ...f.options },
+      cloth: { p: f.cloth.p.slice(), v: f.cloth.v.slice(), time: f.cloth.time },
+    });
+  }
+  return {
+    app: "cloth-vector-lab",
+    version: 1,
+    scene: {
+      width: scene.width,
+      height: scene.height,
+      background: scene.background,
+      shade: scene.shade,
+      speed: scene.speed,
+      globalWind: scene.globalWind,
+      wind: { ...scene.wind },
+    },
+    sources,
+    flags: items,
+  };
+}
+async function restoreProject(data) {
+  if (data?.app !== "cloth-vector-lab" || !Array.isArray(data.flags)) throw new Error("Это не файл проекта Cloth.");
+  loading = true;
+  updateButtons();
+  const errors = [];
+  try {
+    flags = [];
+    setSelection([]);
+    clearTimeline();
+    Object.assign(scene, data.scene, { wind: { ...scene.wind, ...data.scene.wind }, wire: scene.wire });
+    $("sceneWidth").value = scene.width;
+    $("sceneHeight").value = scene.height;
+    $("shade").checked = !!scene.shade;
+    $("speed").value = String(scene.speed);
+    if (!$("speed").value) $("speed").value = String((scene.speed = 1));
+    const decoded = [];
+    for (const src of data.sources) {
+      try {
+        const file = new File([src.blob], src.name, { type: src.type || src.blob.type });
+        decoded.push({ ...(await decodeFile(file)), source: { name: src.name, blob: src.blob }, used: false });
+      } catch (e) {
+        decoded.push(null);
+        errors.push(src.name + ": " + e.message);
+      }
+    }
+    for (const item of data.flags.slice(0, MAX_FLAGS)) {
+      const d = decoded[item.source];
+      if (!d) continue;
+      let image = d.image;
+      try {
+        if (isVideo(image) && d.used) image = await cloneVideo(image);
+      } catch (e) {
+        errors.push(item.name + ": " + e.message);
+        continue;
+      }
+      d.used = true;
+      const f = addImage(image, item.name, d.shapes, d.reason, { select: false });
+      Object.assign(f, {
+        source: d.source,
+        x: item.x,
+        y: item.y,
+        width: item.width,
+        roll: item.roll || 0,
+        edge: item.edge,
+        resolution: item.resolution,
+        visible: item.visible !== false,
+        animationEnabled: item.animationEnabled !== false,
+        options: { ...clothDefaults, ...item.options },
+      });
+      rebuildFlag(f);
+      if (item.cloth?.p?.length === f.cloth.p.length) {
+        f.cloth.p.set(item.cloth.p);
+        f.cloth.v.set(item.cloth.v);
+        f.cloth.time = item.cloth.time || 0;
+        f.cloth.computeNormals();
+      }
+    }
+  } finally {
+    loading = false;
+    setBackground(scene.background);
+    sync();
+    layout();
+    updateMedia();
+  }
+  return errors;
+}
+const idb = (mode, run) =>
+  new Promise((resolve, reject) => {
+    const open = indexedDB.open("cloth-vector-lab", 1);
+    open.onupgradeneeded = () => open.result.createObjectStore("kv");
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const tx = open.result.transaction("kv", mode),
+        request = run(tx.objectStore("kv"));
+      tx.oncomplete = () => {
+        open.result.close();
+        resolve(request.result);
+      };
+      tx.onerror = tx.onabort = () => {
+        open.result.close();
+        reject(tx.error);
+      };
+    };
+  });
+let autosaveTimer = 0,
+  autosaveReady = false;
+function scheduleAutosave() {
+  if (!autosaveReady) return;
+  clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(async () => {
+    if (busy || loading) return scheduleAutosave();
+    try {
+      const data = await serializeProject();
+      await idb("readwrite", (store) => store.put(data, "autosave"));
+    } catch (e) {
+      console.warn("Autosave failed", e);
+    }
+  }, 1200);
+}
+const toBase64 = (bytes) => {
+  let text = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(text);
+};
+const fromBase64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
+$("saveProject").onclick = async () => {
+  if (busy || loading) return;
+  try {
+    const data = await serializeProject(),
+      skipped = [];
+    const sources = [];
+    for (const s of data.sources) {
+      const big = s.blob.size > 60 * 1024 * 1024;
+      if (big) skipped.push(s.name);
+      sources.push({
+        name: s.name,
+        type: s.type,
+        data: big ? null : toBase64(new Uint8Array(await s.blob.arrayBuffer())),
+      });
+    }
+    const file = {
+      ...data,
+      sources,
+      flags: data.flags.map((f) => ({
+        ...f,
+        cloth: {
+          time: f.cloth.time,
+          p: toBase64(new Uint8Array(f.cloth.p.buffer)),
+          v: toBase64(new Uint8Array(f.cloth.v.buffer)),
+        },
+      })),
+    };
+    download(new Blob([JSON.stringify(file)], { type: "application/json" }), "cloth-project.cloth");
+    status(
+      "Проект сохранён в файл." +
+        (skipped.length ? " Не вошли файлы больше 60 МБ: " + skipped.join(", ") + "." : ""),
+    );
+  } catch (e) {
+    status("Не удалось сохранить проект: " + e.message);
+  }
+};
+$("openProject").onclick = () => $("projectFile").click();
+$("projectFile").onchange = async (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file || busy || loading) return;
+  try {
+    const data = JSON.parse(await file.text());
+    if (data?.app !== "cloth-vector-lab") throw new Error("Это не файл проекта Cloth.");
+    data.sources = data.sources.map((s) => ({
+      name: s.name,
+      type: s.type,
+      blob: new Blob([s.data ? fromBase64(s.data) : new Uint8Array()], { type: s.type }),
+    }));
+    for (const f of data.flags)
+      if (f.cloth) {
+        f.cloth.p = new Float32Array(fromBase64(f.cloth.p).buffer);
+        f.cloth.v = new Float32Array(fromBase64(f.cloth.v).buffer);
+      }
+    const errors = await restoreProject(data);
+    resetHistory();
+    status("Проект открыт: флагов — " + flags.length + ". " + errors.join(" "));
+  } catch (e) {
+    status("Не удалось открыть проект: " + (e instanceof SyntaxError ? "файл повреждён." : e.message));
+  }
+};
+$("newProject").onclick = () => {
+  if (busy || loading || !flags.length) return;
+  setSelection(flags.map((f) => f.id));
+  deleteSelection();
+  clearTimeline();
+  status("Сцена очищена. Cmd/Ctrl+Z вернёт флаги.");
+  scheduleCommit(0);
+};
+$("copyVector").onclick = async () => {
+  const b = $("copyVector");
+  try {
+    await navigator.clipboard.writeText(vectorText);
+    b.textContent = "Скопировано ✓";
+  } catch {
+    b.textContent = "Не удалось скопировать";
+  }
+  setTimeout(() => (b.textContent = "Копировать SVG"), 2200);
+};
+async function startup() {
+  let restored = false;
+  try {
+    const saved = await idb("readonly", (store) => store.get("autosave"));
+    if (saved?.flags?.length) {
+      const errors = await restoreProject(saved);
+      restored = flags.length > 0;
+      if (restored) status("Восстановлена сохранённая сцена. " + errors.join(" "));
+    }
+  } catch (e) {
+    console.warn("Autosave restore failed", e);
+  }
+  if (!restored && !flags.length)
+    await loadFiles([new File([vectorDemo], "Демо-флаг.svg", { type: "image/svg+xml" })]);
+  autosaveReady = true;
+  resetHistory();
+}
 canvas.addEventListener("webglcontextlost", (e) => {
   e.preventDefault();
   play(false);
@@ -1564,5 +1998,5 @@ try {
 }
 sync();
 layout();
-loadFiles([new File([vectorDemo], "Демо-флаг.svg", { type: "image/svg+xml" })]);
+startup();
 requestAnimationFrame(loop);

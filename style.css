@@ -268,3 +268,14 @@ body.reordering,body.reordering *{cursor:grabbing!important;user-select:none}
 .swatches{gap:4px;padding:0 2px}
 .swatches .swatch{width:20px;height:20px}
 .bottombar .view .toggle{padding:0 4px}
+
+/* v3: project menu, undo, timeline */
+.topbar .export{margin-left:0}
+.topbar .history{margin-left:auto;gap:0}
+.export summary.pill{background:var(--panel);padding:13px 18px}
+.bottombar .transport{flex:1 1 380px;min-width:0}
+.timeline{flex:1;min-width:80px;margin:0 4px}
+.timeline:disabled{opacity:.35}
+.dialog-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.dialog-actions .pill{padding:12px 20px}
+.dialog-actions .muted{font-size:12px}
