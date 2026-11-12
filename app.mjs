@@ -150,7 +150,7 @@ function clearDropMarks() {
 }
 $("objectList").addEventListener("pointerdown", (e) => {
   const entry = e.target.closest(".object-entry");
-  if (!entry || busy || e.button !== 0 || e.target.closest(".layer-pause,.visibility")) return;
+  if (!entry || busy || e.button !== 0 || e.target.closest(".layer-pause,.visibility,.lock,.badge,input")) return;
   layerDrag = { id: +entry.dataset.flagId, y: e.clientY, moved: false, target: null, after: false };
 });
 window.addEventListener("pointermove", (e) => {
@@ -190,6 +190,8 @@ window.addEventListener("pointerup", () => {
 });
 function chooseInList(f, e) {
   if (busy) return;
+  // A repeated plain click on the only selected row changes nothing (keeps the row alive for double click).
+  if (!e.shiftKey && !e.metaKey && !e.ctrlKey && selection.size === 1 && selection.has(f.id)) return;
   if (e.shiftKey && selectedId != null) {
     const shown = [...flags].reverse(),
       a = shown.findIndex((x) => x.id === selectedId),
@@ -277,6 +279,47 @@ function renderList() {
       if (layerDrag?.moved) return;
       chooseInList(f, e);
     };
+    choose.ondblclick = () => {
+      if (busy) return;
+      const input = document.createElement("input");
+      input.className = "rename";
+      input.value = f.name;
+      input.maxLength = 80;
+      choose.replaceWith(input);
+      input.focus();
+      input.select();
+      let done = false;
+      const finish = (save) => {
+        if (done) return;
+        done = true;
+        if (save) f.name = input.value.trim() || f.name;
+        sync();
+        scheduleCommit(0);
+      };
+      input.onblur = () => finish(true);
+      input.onkeydown = (e) => {
+        e.stopPropagation();
+        if (e.key === "Enter") finish(true);
+        if (e.key === "Escape") finish(false);
+      };
+    };
+    if (f.group) {
+      entry.dataset.group = f.group;
+      entry.style.setProperty("--group", groupColor(f.group));
+    }
+    if (f.locked) row.classList.add("is-locked");
+    const lockButton = document.createElement("button");
+    lockButton.className = "lock";
+    lockButton.title = f.locked ? "Снять замок" : "Закрепить: нельзя выбрать и сдвинуть на холсте";
+    lockButton.setAttribute("aria-label", lockButton.title);
+    lockButton.innerHTML = f.locked
+      ? '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>'
+      : '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 4.6-1.3"/></svg>';
+    lockButton.onclick = () => {
+      if (busy) return;
+      f.locked = f.locked ? undefined : true;
+      sync();
+    };
     const eye = document.createElement("button");
     eye.className = "visibility";
     eye.innerHTML = f.visible
@@ -300,8 +343,8 @@ function renderList() {
         ? "Не попадёт в SVG: " + f.reason
         : "Растровый слой: есть в PNG и анимации, для SVG его нужно скрыть";
       badge.onclick = () => status(badge.title);
-      row.append(choose, badge, eye);
-    } else row.append(choose, eye);
+      row.append(choose, badge, lockButton, eye);
+    } else row.append(choose, lockButton, eye);
     entry.append(pause, row);
     list.append(entry);
   }
@@ -323,10 +366,18 @@ function sync() {
     el.disabled = none || busy;
   // Shared wind stays editable without a selection.
   $("globalWind").disabled = busy;
+  for (const el of $("userPresets").querySelectorAll("button:last-child")) el.disabled = busy;
   $("globalWind").checked = scene.globalWind;
   if (scene.globalWind)
     for (const el of $("windGroup").querySelectorAll("input,select,button")) el.disabled = busy;
   $("propsPanel").classList.toggle("is-multi", multi);
+  const rects = list.length > 0 && list.every((x) => x.rect);
+  $("colorGroup").hidden = !rects;
+  if (rects)
+    for (const sw of $("recolor").querySelectorAll("[data-color]"))
+      sw.classList.toggle("active", list.every((x) => x.rect.color === sw.dataset.color));
+  $("lockBtn").classList.toggle("active", list.length > 0 && list.every((x) => x.locked));
+  $("lockBtn").textContent = list.length > 0 && list.every((x) => x.locked) ? "снять замок" : "замок";
   $("alignGroup").classList.toggle("can-distribute", list.length > 2);
   $("objectName").disabled = busy || none || multi;
   $("objectName").value = multi ? "" : f ? f.name : "";
@@ -476,7 +527,7 @@ async function decodeFile(file) {
   }
 }
 async function loadFiles(files) {
-  if (busy || loading) return;
+  if (busy || loading) return [];
   loading = true;
   updateButtons();
   const errors = [],
@@ -506,6 +557,7 @@ async function loadFiles(files) {
   status(`Добавлено флагов: ${added}. ` + errors.join(" "));
   $("file").value = "";
   scheduleCommit(0);
+  return addedIds;
 }
 $("file").onchange = (e) => loadFiles([...e.target.files]);
 $("demo").onclick = () => loadFiles([new File([vectorDemo], "Демо-флаг.svg", { type: "image/svg+xml" })]);
@@ -514,7 +566,9 @@ $("duplicate").onclick = async () => {
   if (!sources.length || busy || loading || flags.length + sources.length > MAX_FLAGS) return;
   loading = true;
   updateButtons();
-  const created = [];
+  const created = [],
+    regroup = new Map();
+  let freeGroup = nextGroup();
   try {
     for (const f of sources) {
       let image = f.image;
@@ -527,6 +581,8 @@ $("duplicate").onclick = async () => {
           source: f.source,
           svgImage: f.svgImage,
           gust: 0,
+          locked: undefined,
+          group: f.group ? (regroup.get(f.group) ?? regroup.set(f.group, freeGroup++).get(f.group)) : undefined,
           x: f.x + scene.width * 0.04,
           y: f.y + scene.height * 0.04,
           options: { ...f.options, phase: copy.options.phase },
@@ -713,11 +769,11 @@ for (const group of document.querySelectorAll(".palette")) {
     const b = e.target.closest("[data-color]");
     if (!b) return;
     paletteColor = b.dataset.color;
-    for (const s of document.querySelectorAll(".palette [data-color]"))
+    for (const s of document.querySelectorAll(".palette:not(#recolor) [data-color]"))
       s.classList.toggle("active", s.dataset.color === paletteColor);
   };
 }
-for (const s of document.querySelectorAll(".palette [data-color]"))
+for (const s of document.querySelectorAll(".palette:not(#recolor) [data-color]"))
   s.classList.toggle("active", s.dataset.color === paletteColor);
 $("makeText").onclick = () => {
   if (busy || loading || flags.length >= MAX_FLAGS) return;
@@ -737,20 +793,6 @@ $("makeText").onclick = () => {
   lines.forEach((line, i) => g.fillText(line, 50, 40 + i * 260));
   addImage(c, "Растровый текст", null);
   status("Для SVG используйте текст в кривых из Figma.");
-};
-$("rectRatio").onclick = (e) => {
-  const b = e.target.closest("button");
-  if (!b) return;
-  for (const x of $("rectRatio").querySelectorAll("button")) x.classList.toggle("active", x === b);
-};
-$("rectAdd").onclick = () => {
-  if (busy || loading || flags.length >= MAX_FLAGS) return;
-  const [rw, rh] = ($("rectRatio").querySelector(".active")?.dataset.ratio || "3:2").split(":").map(Number),
-    h = 1000,
-    w = Math.round((h * rw) / rh),
-    names = { "#FF3629": "красный", "#FB8DED": "розовый", "#60C9F1": "голубой", "#FF6A00": "оранжевый", "#00804D": "зелёный", "#FFC800": "жёлтый" },
-    text = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><rect width="${w}" height="${h}" fill="${paletteColor}"/></svg>`;
-  loadFiles([new File([text], `Прямоугольник ${rw}:${rh} · ${names[paletteColor] || paletteColor}.svg`, { type: "image/svg+xml" })]);
 };
 // Align: one flag aligns to the artboard, several align to their common bounds (rest pose).
 function unionBounds(list) {
@@ -829,7 +871,7 @@ function layout() {
       Math.max(1, stage.clientWidth - 40) / scene.width,
       Math.max(1, stage.clientHeight - 40) / scene.height,
     ),
-    scale = fit * +$("previewZoom").value;
+    scale = fit * zoom;
   $("frame").style.width = scene.width * scale + "px";
   $("frame").style.height = scene.height * scale + "px";
   $("selectionOverlay").setAttribute("viewBox", `0 0 ${scene.width} ${scene.height}`);
@@ -867,7 +909,6 @@ $("previewHeight").oninput = () => {
   $("stage").style.height = $("previewHeight").value + "px";
   layout();
 };
-$("previewZoom").onchange = layout;
 new ResizeObserver(layout).observe($("stage"));
 function previewSize() {
   const r = canvas.getBoundingClientRect(),
@@ -913,7 +954,7 @@ function setRect(el, b) {
 }
 function selectionOutline() {
   const list = selectedFlags().filter((f) => f.visible),
-    single = selection.size === 1 && list.length === 1 ? list[0] : null,
+    single = selection.size === 1 && list.length === 1 && !list[0].locked ? list[0] : null,
     box = $("selectionBox"),
     cross = $("selectionCenter"),
     unit = scene.width / Math.max(1, canvas.clientWidth),
@@ -990,7 +1031,7 @@ function pointerPoint(e) {
 // Topmost layer under the point: layer order wins over 3D depth.
 function hitTop(x, y) {
   for (let i = flags.length - 1; i >= 0; i--)
-    if (flags[i].visible && hitFlag([flags[i]], scene, x, y)) return flags[i];
+    if (flags[i].visible && !flags[i].locked && hitFlag([flags[i]], scene, x, y)) return flags[i];
   return null;
 }
 // Snap targets: artboard edges and centre, plus edges and centres of other visible flags.
@@ -1024,10 +1065,11 @@ frame.onpointerdown = (e) => {
   const common = { pointerId: e.pointerId, point, wasPlaying: playing };
   if (handle || rotate) {
     const f = selected();
-    if (!f?.visible) return;
+    if (!f?.visible || f.locked) return;
     pointer = {
       ...common,
       id: f.id,
+      targets: snapTargets(new Set([f.id])),
       starts: new Map([[f.id, { x: f.x, y: f.y, width: f.width, roll: f.roll }]]),
       rotate: rotate ? beginRotate(f, point) : null,
       resize: handle ? beginResize(f, handle.dataset.corner, point) : null,
@@ -1043,7 +1085,7 @@ frame.onpointerdown = (e) => {
         ...common,
         marquee: {
           base: additive ? new Set(selection) : new Set(),
-          boxes: flags.filter((x) => x.visible).map((x) => ({ id: x.id, b: flagBounds(x) })),
+          boxes: flags.filter((x) => x.visible && !x.locked).map((x) => ({ id: x.id, b: flagBounds(x) })),
           rect: null,
         },
       };
@@ -1059,8 +1101,8 @@ frame.onpointerdown = (e) => {
           return;
         }
         ids.add(f.id);
-        setSelection([...ids], f.id);
-      } else if (!selection.has(f.id)) setSelection([f.id]);
+        setSelection(groupMembers([...ids]), f.id);
+      } else if (!selection.has(f.id)) setSelection(groupMembers([f.id]), f.id);
       else selectedId = f.id;
       const moving = selectedFlags();
       pointer = {
@@ -1093,7 +1135,7 @@ frame.onpointermove = (e) => {
     const hit = m.boxes
       .filter(({ b }) => b.left < rect.right && b.right > rect.left && b.top < rect.bottom && b.bottom > rect.top)
       .map(({ id }) => id);
-    setSelection([...new Set([...m.base, ...hit])]);
+    setSelection(groupMembers([...new Set([...m.base, ...hit])]));
     sync();
     return;
   }
@@ -1103,7 +1145,25 @@ frame.onpointermove = (e) => {
     f.roll = rotateFromPointer(pointer.rotate, point, e.shiftKey);
     $("roll").value = Math.round(((f.roll * 180) / Math.PI) * 10) / 10;
     rotationReadout.textContent = $("roll").value + "°" + (e.shiftKey ? " · шаг 15°" : "");
-  } else if (pointer.resize) Object.assign(f, resizeFromPointer(pointer.resize, point));
+  } else if (pointer.resize) {
+    // Proportional resize; the dragged corner snaps to the artboard and to other flags (Alt: off).
+    const r = pointer.resize;
+    let next = resizeFromPointer(r, point);
+    pointer.guides = "";
+    if (!e.altKey) {
+      const k = next.width / r.width,
+        threshold = 6 * unit,
+        sx = Math.abs(r.dx) > 1e-6 ? snapAxis([r.anchor.x + r.dx * k], pointer.targets.xs, threshold) : null,
+        sy = Math.abs(r.dy) > 1e-6 ? snapAxis([r.anchor.y + r.dy * k], pointer.targets.ys, threshold) : null,
+        useX = sx && (!sy || Math.abs(sx.d) <= Math.abs(sy.d)),
+        scale = useX ? (sx.t - r.anchor.x) / r.dx : sy ? (sy.t - r.anchor.y) / r.dy : 0;
+      if (scale > 0) {
+        next = { width: r.width * scale, x: r.anchor.x + (r.x - r.anchor.x) * scale, y: r.anchor.y + (r.y - r.anchor.y) * scale };
+        pointer.guides = useX ? `M${sx.t} 0V${scene.height}` : `M0 ${sy.t}H${scene.width}`;
+      }
+    }
+    Object.assign(f, next);
+  }
   else {
     let dx = point.x - pointer.point.x,
       dy = point.y - pointer.point.y;
@@ -1239,7 +1299,12 @@ window.addEventListener("keydown", (e) => {
     return;
   if (e.code === "Space") {
     e.preventDefault();
-    play(!playing);
+    if (!e.repeat) {
+      spaceHeld = true;
+      spacePanned = false;
+      $("stage").classList.add("pan-ready");
+    }
+    return;
   }
   const list = selectedFlags(),
     mod = e.metaKey || e.ctrlKey;
@@ -1262,9 +1327,13 @@ window.addEventListener("keydown", (e) => {
   } else if (mod && e.code === "KeyY") {
     e.preventDefault();
     undo(1);
+  } else if (mod && e.code === "KeyG") {
+    e.preventDefault();
+    if (e.shiftKey) ungroupSelection();
+    else groupSelection();
   } else if (mod && e.code === "KeyA") {
     e.preventDefault();
-    setSelection(flags.map((f) => f.id));
+    setSelection(flags.filter((f) => !f.locked).map((f) => f.id));
     sync();
   } else if (mod && e.code === "KeyD" && list.length) {
     e.preventDefault();
@@ -1658,6 +1727,230 @@ $("animate").onclick = async () => {
     }
   }
 };
+// ---------- Zoom and pan ----------
+let zoom = 1,
+  spaceHeld = false,
+  spacePanned = false,
+  pan = null;
+function setZoom(z, anchor) {
+  const stage = $("stage"),
+    frameEl = $("frame"),
+    before = frameEl.getBoundingClientRect(),
+    box = stage.getBoundingClientRect(),
+    a = anchor || { x: box.left + box.width / 2, y: box.top + box.height / 2 },
+    rx = (a.x - before.left) / before.width,
+    ry = (a.y - before.top) / before.height;
+  zoom = Math.max(0.25, Math.min(8, z));
+  layout();
+  const after = frameEl.getBoundingClientRect();
+  stage.scrollLeft += after.left + rx * after.width - a.x;
+  stage.scrollTop += after.top + ry * after.height - a.y;
+  const select = $("previewZoom"),
+    preset = [...select.options].find((o) => o.value !== "custom" && Math.abs(+o.value - zoom) < 0.005);
+  $("zoomCustom").hidden = !!preset;
+  $("zoomCustom").textContent = Math.round(zoom * 100) + "%";
+  select.value = preset ? preset.value : "custom";
+}
+$("previewZoom").onchange = () => {
+  if ($("previewZoom").value !== "custom") setZoom(+$("previewZoom").value);
+};
+$("stage").addEventListener(
+  "wheel",
+  (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    setZoom(zoom * Math.exp(-e.deltaY * (e.deltaMode ? 0.05 : 0.0025)), { x: e.clientX, y: e.clientY });
+  },
+  { passive: false },
+);
+$("stage").addEventListener(
+  "pointerdown",
+  (e) => {
+    if (!(spaceHeld && e.button === 0) && e.button !== 1) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const stage = $("stage");
+    pan = { id: e.pointerId, x: e.clientX, y: e.clientY, left: stage.scrollLeft, top: stage.scrollTop };
+    stage.setPointerCapture(e.pointerId);
+    stage.classList.add("panning");
+  },
+  true,
+);
+$("stage").addEventListener("pointermove", (e) => {
+  if (!pan || e.pointerId !== pan.id) return;
+  spacePanned = true;
+  $("stage").scrollLeft = pan.left - (e.clientX - pan.x);
+  $("stage").scrollTop = pan.top - (e.clientY - pan.y);
+});
+for (const type of ["pointerup", "pointercancel"])
+  $("stage").addEventListener(type, (e) => {
+    if (!pan || e.pointerId !== pan.id) return;
+    pan = null;
+    $("stage").classList.remove("panning");
+  });
+window.addEventListener("keyup", (e) => {
+  if (e.code !== "Space" || !spaceHeld) return;
+  spaceHeld = false;
+  $("stage").classList.remove("pan-ready");
+  if (!spacePanned && !busy && !pointer) play(!playing);
+});
+window.addEventListener("blur", () => {
+  spaceHeld = false;
+  $("stage").classList.remove("pan-ready");
+});
+
+// ---------- Groups and locks ----------
+const groupColor = (g) => `hsl(${(g * 67) % 360} 70% 55%)`;
+function groupMembers(ids) {
+  const groups = new Set(flags.filter((f) => ids.includes(f.id) && f.group).map((f) => f.group));
+  if (!groups.size) return ids;
+  return [...new Set([...ids, ...flags.filter((f) => groups.has(f.group) && !f.locked).map((f) => f.id)])];
+}
+const nextGroup = () => Math.max(0, ...flags.map((f) => f.group || 0)) + 1;
+function groupSelection() {
+  const list = selectedFlags();
+  if (busy || list.length < 2) return;
+  const g = nextGroup();
+  for (const f of list) f.group = g;
+  status("Флаги сгруппированы: клик по одному выбирает всю группу.");
+  sync();
+}
+function ungroupSelection() {
+  const list = selectedFlags();
+  if (busy || !list.some((f) => f.group)) return;
+  for (const f of list) f.group = undefined;
+  sync();
+}
+$("groupBtn").onclick = groupSelection;
+$("ungroupBtn").onclick = ungroupSelection;
+$("lockBtn").onclick = () => {
+  const list = selectedFlags();
+  if (busy || !list.length) return;
+  const lock = !list.every((f) => f.locked);
+  for (const f of list) f.locked = lock || undefined;
+  sync();
+};
+
+// ---------- Rectangles: custom proportions and recolouring ----------
+const colorNames = { "#FF3629": "красный", "#FB8DED": "розовый", "#60C9F1": "голубой", "#FF6A00": "оранжевый", "#00804D": "зелёный", "#FFC800": "жёлтый" };
+function rectFile(rw, rh, color) {
+  const k = 1000 / Math.max(rw, rh),
+    w = Math.max(1, Math.round(rw * k)),
+    h = Math.max(1, Math.round(rh * k)),
+    text = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><rect width="${w}" height="${h}" fill="${color}"/></svg>`;
+  return new File([text], `Прямоугольник ${rw}:${rh} · ${colorNames[color] || color}.svg`, { type: "image/svg+xml" });
+}
+function markRatio() {
+  const value = $("rectW").value + ":" + $("rectH").value;
+  for (const x of $("rectRatio").querySelectorAll("button")) x.classList.toggle("active", x.dataset.ratio === value);
+}
+$("rectRatio").onclick = (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  [$("rectW").value, $("rectH").value] = b.dataset.ratio.split(":");
+  markRatio();
+};
+$("rectW").oninput = $("rectH").oninput = markRatio;
+$("rectAdd").onclick = async () => {
+  if (busy || loading || flags.length >= MAX_FLAGS) return;
+  const rw = +$("rectW").value,
+    rh = +$("rectH").value;
+  if (!(rw > 0 && rh > 0) || Math.max(rw / rh, rh / rw) > MAX_RATIO)
+    return status(`Пропорции прямоугольника: положительные числа, не шире ${MAX_RATIO}:1.`);
+  const color = paletteColor,
+    ids = await loadFiles([rectFile(rw, rh, color)]);
+  for (const f of flags) if (ids.includes(f.id)) f.rect = { color, w: rw, h: rh };
+  fitTextures();
+  scheduleCommit(0);
+};
+$("recolor").onclick = async (e) => {
+  const b = e.target.closest("[data-color]"),
+    list = selectedFlags().filter((f) => f.rect);
+  if (!b || busy || loading || !list.length) return;
+  loading = true;
+  try {
+    for (const f of list) {
+      const file = rectFile(f.rect.w, f.rect.h, b.dataset.color),
+        d = await decodeFile(file);
+      Object.assign(f, { image: d.image, svgImage: d.svgImage, shapes: d.shapes, reason: d.reason, source: { name: file.name, blob: file } }, makeAlpha(d.image));
+      if (f.name.startsWith("Прямоугольник")) f.name = file.name.replace(/\.svg$/i, "");
+      f.rect = { ...f.rect, color: b.dataset.color };
+    }
+  } catch (err) {
+    status(err.message);
+  } finally {
+    loading = false;
+    fitTextures();
+    sync();
+    scheduleCommit(0);
+  }
+};
+
+// ---------- Own presets (cloth + wind), kept in this browser ----------
+const presetKeys = ["stiffness", "mass", "damping", "gravity", "strength", "turbulence", "angle", "wind"];
+function loadPresets() {
+  try {
+    return JSON.parse(localStorage.getItem("cloth-presets") || "[]");
+  } catch {
+    return [];
+  }
+}
+function storePresets(list) {
+  try {
+    localStorage.setItem("cloth-presets", JSON.stringify(list));
+  } catch {}
+  renderPresets();
+}
+function renderPresets() {
+  const host = $("userPresets");
+  host.replaceChildren();
+  loadPresets().forEach((preset, i) => {
+    const chip = document.createElement("span"),
+      apply = document.createElement("button"),
+      remove = document.createElement("button");
+    chip.className = "user-preset";
+    apply.textContent = preset.name;
+    apply.title = "Применить пресет к выбранным флагам";
+    apply.onclick = () => {
+      if (busy) return;
+      for (const key of presetKeys) for (const t of optionTargets(key)) if (preset.values[key] !== undefined) t[key] = preset.values[key];
+      sync();
+    };
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", "Удалить пресет " + preset.name);
+    remove.onclick = () => storePresets(loadPresets().filter((_, j) => j !== i));
+    chip.append(apply, remove);
+    host.append(chip);
+  });
+}
+$("presetSave").onclick = () => {
+  const f = primary(),
+    name = $("presetName").value.trim();
+  if (!f) return status("Выберите флаг, чьи настройки сохранить.");
+  if (!name) return status("Введите название пресета.");
+  const source = { ...f.options, ...(scene.globalWind ? scene.wind : {}) };
+  storePresets([...loadPresets().filter((p) => p.name !== name), { name, values: Object.fromEntries(presetKeys.map((k) => [k, source[k]])) }]);
+  $("presetName").value = "";
+  status("Пресет «" + name + "» сохранён.");
+};
+renderPresets();
+
+// ---------- Panels ----------
+for (const [id, cls] of [
+  ["toggleLeft", "hide-left"],
+  ["toggleRight", "hide-right"],
+]) {
+  const app = document.querySelector(".app");
+  try {
+    if (localStorage.getItem("cloth-" + cls) === "1") app.classList.add(cls);
+  } catch {}
+  $(id).onclick = () => {
+    const on = app.classList.toggle(cls);
+    try {
+      localStorage.setItem("cloth-" + cls, on ? "1" : "0");
+    } catch {}
+  };
+}
 // ---------- Simulation: cloth steps run in a pool of background workers ----------
 const pool = { workers: [], ok: true, seq: 0, pending: new Map() };
 let simEpoch = 0,
@@ -1872,6 +2165,15 @@ function takeSnapshot() {
     flags: flags.map((flag) => ({
       flag,
       props: flagProps(flag),
+      assets: {
+        image: flag.image,
+        svgImage: flag.svgImage,
+        shapes: flag.shapes,
+        reason: flag.reason,
+        source: flag.source,
+        thumbnail: flag.thumbnail,
+        alpha: flag.alpha,
+      },
     })),
     selection: [...selection],
     selectedId,
@@ -1921,7 +2223,8 @@ function applySnapshot(s) {
   Object.assign(scene, s.scene, { wind: { ...s.scene.wind } });
   $("sceneWidth").value = scene.width;
   $("sceneHeight").value = scene.height;
-  flags = s.flags.map(({ flag, props }) => {
+  flags = s.flags.map(({ flag, props, assets }) => {
+    Object.assign(flag, assets);
     const rebuild =
       flag.edge !== props.edge || flag.resolution !== props.resolution || (flag.pin || "edge") !== (props.pin || "edge");
     Object.assign(flag, props, { options: { ...props.options } });
@@ -2170,6 +2473,58 @@ $("copyVector").onclick = async () => {
   }
   setTimeout(() => (b.textContent = "Копировать SVG"), 2200);
 };
+// ---------- Named scenes stored in this browser ----------
+async function refreshScenes() {
+  const host = $("sceneList");
+  let keys = [];
+  try {
+    keys = (await idb("readonly", (store) => store.getAllKeys())).filter((k) => String(k).startsWith("scene:"));
+  } catch {}
+  host.replaceChildren();
+  for (const key of keys) {
+    const row = document.createElement("div"),
+      open = document.createElement("button"),
+      remove = document.createElement("button"),
+      name = key.slice(6);
+    row.className = "scene-row";
+    open.textContent = name;
+    open.title = "Открыть сцену";
+    open.onclick = async () => {
+      if (busy || loading) return;
+      try {
+        const errors = await restoreProject(await idb("readonly", (store) => store.get(key)));
+        resetHistory();
+        $("projectMenu").open = false;
+        status("Открыта сцена «" + name + "». " + errors.join(" "));
+      } catch (e) {
+        status("Не удалось открыть сцену: " + e.message);
+      }
+    };
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", "Удалить сцену " + name);
+    remove.onclick = async () => {
+      await idb("readwrite", (store) => store.delete(key));
+      refreshScenes();
+    };
+    row.append(open, remove);
+    host.append(row);
+  }
+}
+$("sceneSave").onclick = async () => {
+  const name = $("sceneName").value.trim();
+  if (busy || loading) return;
+  if (!name) return status("Введите название сцены.");
+  try {
+    const data = await serializeProject();
+    await idb("readwrite", (store) => store.put(data, "scene:" + name));
+    $("sceneName").value = "";
+    status("Сцена «" + name + "» сохранена в этом браузере.");
+    refreshScenes();
+  } catch (e) {
+    status("Не удалось сохранить сцену: " + e.message);
+  }
+};
+refreshScenes();
 async function startup() {
   let restored = false;
   try {

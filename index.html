@@ -44,6 +44,11 @@
           <button type="button" data-ratio="8:1">8:1</button>
           <button type="button" data-ratio="2:3">2:3</button>
         </div>
+        <div class="rect-size" title="Свои пропорции: ширина и высота">
+          <label class="field"><span>ш</span><input id="rectW" type="number" min="1" max="10000" step="1" value="3"></label>
+          <span class="muted">:</span>
+          <label class="field"><span>в</span><input id="rectH" type="number" min="1" max="10000" step="1" value="2"></label>
+        </div>
         <div class="text-tools">
           <div class="palette" aria-label="Цвет"></div>
           <button id="rectAdd" class="pill">добавить</button>
@@ -90,6 +95,11 @@ FLOW.</textarea>
         <button type="button" id="openProject" class="pill wide">Открыть файл…</button>
         <input type="file" id="projectFile" accept=".cloth,application/json" hidden>
         <button type="button" id="newProject" class="pill wide">Очистить сцену</button>
+        <div class="card scenes">
+          <div class="group-title">Сцены в этом браузере</div>
+          <div id="sceneList" class="scene-list"></div>
+          <div class="rect-size"><label class="field"><input id="sceneName" type="text" maxlength="40" placeholder="название сцены"></label><button type="button" id="sceneSave" class="chip">сохранить</button></div>
+        </div>
       </div>
     </details>
     <details class="export" id="exportMenu">
@@ -128,6 +138,8 @@ FLOW.</textarea>
     </details>
   </div>
 
+  <button type="button" id="toggleLeft" class="panel-toggle left" title="Скрыть или показать слои" aria-label="Панель слоёв">‹</button>
+  <button type="button" id="toggleRight" class="panel-toggle right" title="Скрыть или показать свойства" aria-label="Панель свойств">›</button>
   <div class="stage" id="stage">
     <div id="frameWrap">
       <div id="frame">
@@ -164,7 +176,8 @@ FLOW.</textarea>
     </div>
     <div class="bar view">
       <span id="frameInfo" hidden>1920 × 1080</span>
-      <select id="previewZoom" aria-label="Масштаб превью">
+      <select id="previewZoom" aria-label="Масштаб превью" title="Cmd/Ctrl + колесо — масштаб, пробел + перетаскивание — сдвиг">
+        <option value="custom" id="zoomCustom" hidden></option>
         <option value="0.5">50%</option>
         <option value="1" selected>по окну</option>
         <option value="1.5">150%</option>
@@ -209,7 +222,17 @@ FLOW.</textarea>
         <button id="layerDown" class="chip" title="На слой ниже · Cmd/Ctrl + [">слой ↓</button>
         <button id="layerUp" class="chip" title="На слой выше · Cmd/Ctrl + ]">слой ↑</button>
       </div>
+      <div class="row-buttons">
+        <button id="groupBtn" class="chip" title="Сгруппировать выделенные · Cmd/Ctrl + G">группа</button>
+        <button id="ungroupBtn" class="chip" title="Разгруппировать · Cmd/Ctrl + Shift + G">разгруппировать</button>
+        <button id="lockBtn" class="chip" title="Закрепить: флаг нельзя выбрать и сдвинуть на холсте">замок</button>
+      </div>
     </div>
+  </div>
+
+  <div class="group" id="colorGroup" hidden>
+    <div class="group-title">Цвет</div>
+    <div class="card"><div class="palette" id="recolor" aria-label="Цвет прямоугольника"></div></div>
   </div>
 
   <div class="group" id="alignGroup">
@@ -262,7 +285,13 @@ FLOW.</textarea>
       <button data-preset="flag">флаг</button>
       <button data-preset="paper">плотная</button>
     </div>
+    <div id="userPresets" class="user-presets"></div>
     <div class="card sliders" id="clothSliders"></div>
+    <details class="text-editor preset-save">
+      <summary class="link">+ сохранить как свой пресет</summary>
+      <div class="rect-size"><label class="field"><input id="presetName" type="text" maxlength="24" placeholder="название"></label><button type="button" id="presetSave" class="chip">сохранить</button></div>
+      <p class="note">Запоминает ткань и ветер. Клик применяет, × удаляет.</p>
+    </details>
     <label class="toggle block"><input id="collision" type="checkbox"><span>самоколлизия <small>beta</small></span></label>
   </div>
 
@@ -295,7 +324,7 @@ FLOW.</textarea>
 <p>Ветер по умолчанию общий для всей сцены (переключатель в разделе «Ветер»); у каждого флага при этом своя фаза порывов. Крепление и ткань настраиваются для выбранных флагов. «Другой порыв» меняет его движение; дубликат получает собственный порыв. Общая пауза останавливает сцену, продолжение и шаг кадра действуют только на включённые слои. ↺ в панели слоёв возвращает исходную физику всех флагов, сохраняя положение и размеры. Физических столкновений разных флагов нет; самоколлизия одного флага экспериментальная.</p>
 <h3>Экспорт</h3>
 <p>Ползунок рядом с паузой — перемотка: симуляция помнит последние секунды, можно вернуться к удачной складке и экспортировать SVG именно этого кадра. В окне проверки SVG можно скачать или скопировать и вставить прямо в Figma. SVG учитывает перекрытия между флагами и внутри складок. Для SVG нужны векторные заливки у всех видимых флагов: текст и обводки переведите в кривые, видео и растр скройте. Длина анимации — от 1 до 60 секунд. PNG-секвенция — 30 кадров/с с прозрачностью в ZIP; видео пишется с фоном в реальном времени. MP4 до 250 МБ, лучше H.264.</p>
-<p class="muted">Space — пауза · стрелки — сдвиг (Shift ×10) · Cmd/Ctrl+A — выделить всё · Cmd/Ctrl+Z — отмена · Cmd/Ctrl+D — копия · Delete — удалить · Cmd/Ctrl+[ ] — слой ниже/выше. Всё считается на вашем устройстве; сцена автоматически сохраняется в этом браузере.</p>
+<p class="muted">Cmd/Ctrl+колесо — масштаб · пробел+перетаскивание — сдвиг холста · Cmd/Ctrl+G — группа · Cmd/Ctrl+V — вставить SVG или картинку · двойной клик по слою — переименовать · Space — пауза · стрелки — сдвиг (Shift ×10) · Cmd/Ctrl+A — выделить всё · Cmd/Ctrl+Z — отмена · Cmd/Ctrl+D — копия · Delete — удалить · Cmd/Ctrl+[ ] — слой ниже/выше. Всё считается на вашем устройстве; сцена автоматически сохраняется в этом браузере.</p>
 </dialog>
 
 <dialog id="vectorDialog" class="vector-dialog">

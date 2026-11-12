@@ -290,3 +290,46 @@ body.reordering,body.reordering *{cursor:grabbing!important;user-select:none}
 .badge.warn{background:#ffe3e0;color:#d92d20;font-weight:700;width:18px;height:18px;padding:0;display:grid;place-items:center}
 .popover .toggle.block{margin:2px 0 4px}
 #pinMode{margin-top:-2px}
+
+/* v5: canvas tools and project */
+.rect-size{display:flex;align-items:center;gap:6px;margin-top:8px}
+.rect-size .field{flex:1}
+.rect-size .chip{flex:0 0 auto;background:var(--panel)}
+.props .rect-size .field,.preset-save .field{background:var(--card)}
+.props .rect-size .chip{background:var(--card)}
+.user-presets{display:flex;flex-wrap:wrap;gap:4px}
+.user-presets:empty{display:none}
+.user-preset{display:inline-flex;align-items:center;background:var(--card);border-radius:var(--r-pill);font-size:12px}
+.user-preset button:first-child{padding:5px 4px 5px 11px}
+.user-preset button:last-child{padding:5px 9px 5px 4px;color:var(--muted)}
+.user-preset button:last-child:hover{color:#d92d20}
+.scenes{display:grid;gap:6px}
+.scene-list{display:grid;gap:2px;max-height:150px;overflow:auto}
+.scene-list:empty::after{content:"пока нет сохранённых сцен";color:var(--muted);font-size:11.5px;padding:2px 4px}
+.scene-row{display:flex;align-items:center;border-radius:9px}
+.scene-row:hover{background:var(--panel)}
+.scene-row button:first-child{flex:1;text-align:left;padding:6px 8px;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.scene-row button:last-child{padding:6px 9px;color:var(--muted)}
+.scenes .field{background:var(--panel)}
+.center{position:relative}
+.panel-toggle{position:absolute;top:50%;z-index:3;width:18px;height:44px;margin-top:-22px;border-radius:9px;background:var(--panel);box-shadow:var(--shadow);color:var(--muted);font-size:14px;line-height:1}
+.panel-toggle:hover{color:var(--text)}
+.panel-toggle.left{left:-6px}
+.panel-toggle.right{right:-6px}
+.app.hide-left{grid-template-columns:0 minmax(0,1fr) 300px}
+.app.hide-right{grid-template-columns:264px minmax(0,1fr) 0}
+.app.hide-left.hide-right{grid-template-columns:0 minmax(0,1fr) 0}
+.app.hide-left .layers,.app.hide-right .props{display:none}
+.app.hide-left,.app.hide-right{column-gap:6px}
+.app.hide-left .panel-toggle.left,.app.hide-right .panel-toggle.right{transform:scaleX(-1)}
+.object-row .lock{width:22px;height:28px;display:none;place-items:center;color:var(--muted);flex:0 0 auto}
+.object-row .lock svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.5}
+.object-row.is-locked .lock{display:grid;color:var(--text)}
+.object-row:hover .lock{display:grid}
+.object-entry[data-group]{position:relative}
+.object-entry[data-group]::before{content:"";position:absolute;left:28px;top:2px;bottom:2px;width:3px;border-radius:2px;background:var(--group,#999)}
+.rename{flex:1;min-width:0;background:var(--panel)!important;border-radius:8px;padding:6px 8px!important;font-size:12.5px;box-shadow:0 0 0 1.5px var(--accent)}
+#stage.panning,#stage.panning *{cursor:grabbing!important}
+#stage.pan-ready,#stage.pan-ready *{cursor:grab!important}
+.chip.active{background:var(--accent-soft);color:var(--accent)}
+.row-buttons .chip{white-space:nowrap}
