@@ -16,8 +16,27 @@ const bbox = (poly) => {
 };
 const overlap = (a, b) =>
   a[0] < b[2] - 1e-10 && a[2] > b[0] + 1e-10 && a[1] < b[3] - 1e-10 && a[3] > b[1] + 1e-10;
+// Interleaves the bits of two 16-bit coordinates (Morton order).
+const morton = (x, y) => {
+  let m = 0;
+  for (let i = 0; i < 16; i++) m += ((x >> i) & 1) * 2 ** (2 * i) + ((y >> i) & 1) * 2 ** (2 * i + 1);
+  return m;
+};
+// Balanced union. Pieces are visited in Morton order first, so each batch covers one small area:
+// the clipper then has far fewer edges in play than with pieces scattered over the whole canvas.
 const unionAll = (items) => {
-  if (!items.length) return [];
+  if (items.length < 2) return items[0] || [];
+  const code = (poly) => {
+    const b = bbox(poly);
+    return morton(
+      Math.max(0, Math.min(65535, Math.round(((b[0] + b[2]) / 2 + 1) * 16384))),
+      Math.max(0, Math.min(65535, Math.round(((b[1] + b[3]) / 2 + 1) * 16384))),
+    );
+  };
+  items = items
+    .map((poly) => ({ poly, code: code(poly) }))
+    .sort((a, b) => a.code - b.code)
+    .map((x) => x.poly);
   while (items.length > 1) {
     const next = [];
     for (let i = 0; i < items.length; i += 16) next.push(polygon.union(...items.slice(i, i + 16)));
@@ -101,6 +120,42 @@ export function exportSceneSVG(flags, o, onProgress = () => {}) {
     onProgress,
   );
 }
+// Marks the cells of a uniform grid over UV space that any contour edge passes through, so a
+// triangle landing in clear cells is known to be wholly inside or wholly outside the region —
+// no clipping needed. G x G cells over [0,1]^2.
+const G = 96;
+function edgeGrid(poly) {
+  const hit = new Uint8Array(G * G),
+    cell = (v) => Math.max(0, Math.min(G - 1, Math.floor(v * G)));
+  for (const p of poly)
+    for (const r of p)
+      for (let i = 0; i < r.length - 1; i++) {
+        const x0 = cell(Math.min(r[i][0], r[i + 1][0])),
+          x1 = cell(Math.max(r[i][0], r[i + 1][0])),
+          y0 = cell(Math.min(r[i][1], r[i + 1][1])),
+          y1 = cell(Math.max(r[i][1], r[i + 1][1]));
+        for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) hit[x * G + y] = 1;
+      }
+  return hit;
+}
+function gridClear(hit, box) {
+  const cell = (v) => Math.max(0, Math.min(G - 1, Math.floor(v * G))),
+    x1 = cell(box[2]),
+    y1 = cell(box[3]);
+  for (let x = cell(box[0]); x <= x1; x++) for (let y = cell(box[1]); y <= y1; y++) if (hit[x * G + y]) return false;
+  return true;
+}
+function pointInPoly(poly, x, y) {
+  let inside = false;
+  for (const p of poly)
+    for (const r of p)
+      for (let i = 0; i < r.length - 1; i++) {
+        const a = r[i],
+          b = r[i + 1];
+        if (a[1] > y !== b[1] > y && x < a[0] + ((y - a[1]) / (b[1] - a[1])) * (b[0] - a[0])) inside = !inside;
+      }
+  return inside;
+}
 function exportProjectedSVG(items, o, onProgress) {
   const faces = [],
     maps = [],
@@ -115,7 +170,7 @@ function exportProjectedSVG(items, o, onProgress) {
       let sourceCover = [];
       for (const s of [...shapes].reverse()) {
         const poly = polygon.difference(s.poly, sourceCover);
-        if (poly.length) regions.push({ fill: s.fill, poly, box: bbox(poly) });
+        if (poly.length) regions.push({ fill: s.fill, poly, box: bbox(poly), edges: edgeGrid(poly) });
         sourceCover = polygon.union(sourceCover, s.poly);
       }
       regionCache.set(shapes, regions);
@@ -203,18 +258,27 @@ function exportProjectedSVG(items, o, onProgress) {
       if (!mapped) {
         const { uv, m, regions } = maps[face.id],
           tri = [[[...uv, uv[0]]]],
-          box = bbox(tri);
+          box = bbox(tri),
+          project = (cut) =>
+            cut.map((p) =>
+              p.map((r) =>
+                r.map(([x, y]) => [snap(m[0] * x + m[2] * y + m[4]), snap(m[1] * x + m[3] * y + m[5])]),
+              ),
+            );
         mapped = [];
         for (const region of regions) {
           if (!overlap(box, region.box)) continue;
+          // Triangle in clear grid cells: wholly inside this colour, or wholly outside it.
+          if (gridClear(region.edges, box)) {
+            if (pointInPoly(region.poly, (uv[0][0] + uv[1][0] + uv[2][0]) / 3, (uv[0][1] + uv[1][1] + uv[2][1]) / 3)) {
+              mapped.push({ fill: region.fill, poly: project(tri) });
+              break;
+            }
+            continue;
+          }
           const cut = polygon.intersection(region.poly, tri);
           if (!cut.length) continue;
-          const poly = cut.map((p) =>
-            p.map((r) =>
-              r.map(([x, y]) => [snap(m[0] * x + m[2] * y + m[4]), snap(m[1] * x + m[3] * y + m[5])]),
-            ),
-          );
-          mapped.push({ fill: region.fill, poly });
+          mapped.push({ fill: region.fill, poly: project(cut) });
         }
         cache.set(face.id, mapped);
       }

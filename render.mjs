@@ -153,14 +153,17 @@ export class Renderer {
         if (!b.points) b.points = new Float32Array(f.cloth.p.length);
         return { f, points: b.points, range: projectFlagInto(f, o, b.points) };
       });
-    const depthRange = ([lo, hi]) => {
-      gl.uniform1f(this.uniform.depthCenter, (lo + hi) / 2);
-      gl.uniform1f(this.uniform.depthSpan, Math.max(1e-6, ((hi - lo) / 2) * 1.02));
-      gl.clear(gl.DEPTH_BUFFER_BIT);
-    };
+    // Each layer owns a slice of the depth buffer, nearer slices for layers in front. Folds are
+    // depth-tested inside a slice; layers never intersect, and no per-layer depth clear is needed.
+    const slices = visible.length,
+      depthSlice = (i, [lo, hi]) => {
+        gl.uniform1f(this.uniform.depthCenter, (lo + hi) / 2);
+        gl.uniform1f(this.uniform.depthSpan, Math.max(1e-6, ((hi - lo) / 2) * 1.02));
+        gl.depthRange(1 - (i + 1) / slices, 1 - i / slices);
+      };
     gl.uniform1f(this.uniform.shade, o.shade ? 1 : 0);
     gl.uniform1i(this.uniform.artwork, 0);
-    for (const { f, points, range } of visible) {
+    for (const [i, { f, points, range }] of visible.entries()) {
       const b = this.mesh(f.cloth);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, this.texture(f.image));
@@ -175,25 +178,25 @@ export class Renderer {
         gl.vertexAttribPointer(this.attrib[n], size, gl.FLOAT, false, 0, 0);
       }
       gl.uniform1f(this.uniform.wire, 0);
-      depthRange(range);
+      depthSlice(i, range);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, b.tri);
       gl.drawElements(gl.TRIANGLES, f.cloth.tri.length, gl.UNSIGNED_SHORT, 0);
     }
     if (o.wire && !exporting) {
       gl.uniform1f(this.uniform.wire, 1);
-      for (const { f, points, range } of visible) {
+      for (const [i, { f, range }] of visible.entries()) {
         const b = this.mesh(f.cloth);
         gl.bindTexture(gl.TEXTURE_2D, this.texture(f.image));
-        for (const [n, data, size] of [
-          ["position", points, 3],
-          ["normal", f.cloth.normals, 3],
-          ["uv", null, 2],
+        // Vertex data is already in these buffers from the fill pass above.
+        for (const [n, size] of [
+          ["position", 3],
+          ["normal", 3],
+          ["uv", 2],
         ]) {
           gl.bindBuffer(gl.ARRAY_BUFFER, b[n]);
-          if (data) gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
           gl.vertexAttribPointer(this.attrib[n], size, gl.FLOAT, false, 0, 0);
         }
-        depthRange(range);
+        depthSlice(i, range);
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, b.lines);
         gl.drawElements(gl.LINES, b.lineCount, gl.UNSIGNED_SHORT, 0);
       }

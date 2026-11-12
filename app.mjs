@@ -29,7 +29,7 @@ const $ = (id) => document.getElementById(id),
   canvas = $("canvas");
 const MAX_FLAGS = 50,
   MAX_RATIO = 60,
-  PALETTE = ["#FF3629", "#FB8DED", "#60C9F1", "#FF6A00", "#00804D", "#FFC800"];
+  PALETTE = ["#FF3629", "#FB8DED", "#60C9F1", "#2487EF", "#FF6A00", "#00804D", "#FFC800"];
 const scene = {
   width: 1920,
   height: 1080,
@@ -910,9 +910,13 @@ $("previewHeight").oninput = () => {
   layout();
 };
 new ResizeObserver(layout).observe($("stage"));
+// Preview resolution follows what the machine can actually draw: full device pixels while frames
+// are quick, dropping towards 1 device pixel per CSS pixel when they are not. Export is unaffected.
+let renderScale = 1,
+  drawCost = 0;
 function previewSize() {
   const r = canvas.getBoundingClientRect(),
-    ratio = Math.min(devicePixelRatio || 1, 2),
+    ratio = Math.min(devicePixelRatio || 1, 2) * renderScale,
     scale = Math.min(ratio, 2400 / Math.max(r.width, r.height));
   return [Math.max(2, Math.round(r.width * scale)), Math.max(2, Math.round(r.height * scale))];
 }
@@ -1010,14 +1014,25 @@ function selectionOutline() {
     });
   });
 }
+// draw() marks the canvas as needing a repaint; the loop repaints at most once per frame and
+// skips it entirely while nothing moves, which keeps the interface responsive on slow machines.
+let dirty = true;
 function draw() {
+  dirty = true;
+}
+function renderNow() {
   if (busy) return;
+  dirty = false;
+  const t = performance.now();
   try {
     renderer?.draw(flags, scene, ...previewSize());
     selectionOutline();
   } catch (e) {
     status(e.message);
   }
+  drawCost = drawCost ? drawCost * 0.9 + (performance.now() - t) * 0.1 : performance.now() - t;
+  if (drawCost > 24 && renderScale > 0.5) renderScale = Math.max(0.5, renderScale - 0.1);
+  else if (drawCost < 9 && renderScale < 1) renderScale = Math.min(1, renderScale + 0.05);
 }
 let pointer = null;
 const frame = $("frame");
@@ -1403,7 +1418,7 @@ function loop(t) {
       stepAsync(n).finally(() => (stepping = false));
     }
   }
-  draw();
+  if (dirty || playing || recordingMedia || videos(flags).some((v) => !v.paused)) renderNow();
   updateTimeline();
   $("time").textContent =
     String(Math.floor(elapsed / 60)).padStart(2, "0") + ":" + (elapsed % 60).toFixed(2).padStart(5, "0");
@@ -1593,6 +1608,7 @@ async function exportSequence() {
     if (cancel) throw new Error("Экспорт отменён.");
     if (loop) loop(frame);
     else if (frame) await stepAsync(2, (1 / 60) * scene.speed);
+    dirty = true;
     await Promise.all([...starts].map(([v, time]) => seekVideo(v, time + (frame / 30) * scene.speed)));
     if (cancel) throw new Error("Экспорт отменён.");
     renderer.draw(flags, scene, w, h, true);
@@ -1832,7 +1848,7 @@ $("lockBtn").onclick = () => {
 };
 
 // ---------- Rectangles: custom proportions and recolouring ----------
-const colorNames = { "#FF3629": "красный", "#FB8DED": "розовый", "#60C9F1": "голубой", "#FF6A00": "оранжевый", "#00804D": "зелёный", "#FFC800": "жёлтый" };
+const colorNames = { "#FF3629": "красный", "#FB8DED": "розовый", "#60C9F1": "голубой", "#2487EF": "синий", "#FF6A00": "оранжевый", "#00804D": "зелёный", "#FFC800": "жёлтый" };
 function rectFile(rw, rh, color) {
   const k = 1000 / Math.max(rw, rh),
     w = Math.max(1, Math.round(rw * k)),
