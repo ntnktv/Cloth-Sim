@@ -1,15 +1,192 @@
-import {projectFlag} from './scene.mjs';
-import {polygon} from './vendor.mjs';
-import {projectCloth,affine,orderPolygons} from './vector.mjs';
-const snap=x=>Math.round(x*1e9)/1e9;
-const bbox=poly=>{const b=[Infinity,Infinity,-Infinity,-Infinity];for(const p of poly)for(const r of p)for(const [x,y]of r){b[0]=Math.min(b[0],x);b[1]=Math.min(b[1],y);b[2]=Math.max(b[2],x);b[3]=Math.max(b[3],y);}return b;};
-const overlap=(a,b)=>a[0]<b[2]-1e-10&&a[2]>b[0]+1e-10&&a[1]<b[3]-1e-10&&a[3]>b[1]+1e-10;
-const unionAll=items=>{if(!items.length)return [];while(items.length>1){const next=[];for(let i=0;i<items.length;i+=16)next.push(polygon.union(...items.slice(i,i+16)));items=next;}return items[0];};
-function ringsPath(poly,width,height){const n=x=>Number(x.toFixed(5));return poly.map(p=>p.map(r=>'M'+r.slice(0,-1).map(([x,y])=>n((x+1)*width/2)+' '+n((1-y)*height/2)).join('L')+'Z').join('')).join('');}
-export function exportFlatSVG(cloth,o,shapes,onProgress=()=>{}){return exportProjectedSVG([{cloth,points:projectCloth(cloth,o),shapes}],o,onProgress);}
-export function exportSceneSVG(flags,o,onProgress=()=>{}){if(!flags.length)throw new Error('Добавьте хотя бы один видимый флаг.');if(flags.some(f=>!f.shapes))throw new Error('Для SVG все видимые флаги должны быть векторными. Скройте растровые объекты или выберите PNG.');return exportProjectedSVG(flags.map(f=>({cloth:f.cloth,points:projectFlag(f,o),shapes:f.shapes})),o,onProgress);}
-function exportProjectedSVG(items,o,onProgress){const faces=[],maps=[],regionCache=new Map();for(const {cloth,points:pts,shapes}of items){let regions=regionCache.get(shapes);if(!regions){regions=[];let sourceCover=[];for(const s of [...shapes].reverse()){const poly=polygon.difference(s.poly,sourceCover);if(poly.length)regions.push({fill:s.fill,poly,box:bbox(poly)});sourceCover=polygon.union(sourceCover,s.poly);}regionCache.set(shapes,regions);}for(let i=0;i<cloth.tri.length;i+=3){const ids=Array.from(cloth.tri.slice(i,i+3)),v=ids.map(id=>pts[id]);const area=(v[1][0]-v[0][0])*(v[2][1]-v[0][1])-(v[1][1]-v[0][1])*(v[2][0]-v[0][0]);if(Math.abs(area)<1e-12)continue;const uv=ids.map(id=>[cloth.uv[id*2],cloth.uv[id*2+1]]),id=maps.length;maps.push({uv,m:affine(uv,v),regions});faces.push({id,v});}}if(faces.length>60000)throw new Error('Слишком подробная сцена. Уменьшите детализацию флагов.');onProgress('Рассчитываю перекрытия складок…');const ordered=orderPolygons(faces).reverse(),cache=new Map(),grid=new Map(),pieces=[],colors=new Map();let operations=0;
-function cells(b){const keys=[];const x0=Math.max(0,Math.min(63,Math.floor((b[0]+1)*32))),x1=Math.max(0,Math.min(63,Math.floor((b[2]+1)*32))),y0=Math.max(0,Math.min(63,Math.floor((b[1]+1)*32))),y1=Math.max(0,Math.min(63,Math.floor((b[3]+1)*32)));for(let x=x0;x<=x1;x++)for(let y=y0;y<=y1;y++)keys.push(x*64+y);return keys;}
-for(let index=0;index<ordered.length;index++){if(index%300===0)onProgress(`Собираю видимые контуры: ${Math.round(index/ordered.length*100)}%`);const face=ordered[index];let mapped=cache.get(face.id);if(!mapped){const {uv,m,regions}=maps[face.id],tri=[[ [...uv,uv[0]] ]],box=bbox(tri);mapped=[];for(const region of regions){if(!overlap(box,region.box))continue;const cut=polygon.intersection(region.poly,tri);if(!cut.length)continue;const poly=cut.map(p=>p.map(r=>r.map(([x,y])=>[snap(m[0]*x+m[2]*y+m[4]),snap(m[1]*x+m[3]*y+m[5])])));mapped.push({fill:region.fill,poly});}cache.set(face.id,mapped);}let ring=face.v.map(v=>[snap(v[0]),snap(v[1])]);ring.push(ring[0]);const clip=[[ring]],clipBox=bbox(clip);if(clipBox[0]>=1||clipBox[2]<=-1||clipBox[1]>=1||clipBox[3]<=-1)continue;
-for(const region of mapped){let visible=polygon.intersection(region.poly,clip,[[[[-1,-1],[1,-1],[1,1],[-1,1],[-1,-1]]]]);if(!visible.length)continue;const b=bbox(visible),keys=cells(b),candidates=new Set();for(const key of keys)for(const id of grid.get(key)||[])candidates.add(id);const blockers=[];for(const id of candidates){const item=pieces[id];if(item.face!==face.id&&overlap(b,item.box))blockers.push(item.poly);}if(blockers.length){if((operations+=blockers.length)>600000)throw new Error('Слишком сложные перекрытия. Выберите меньшую детализацию или другой кадр.');visible=polygon.difference(visible,...blockers);}if(!visible.length)continue;const id=pieces.length;pieces.push({face:face.id,box:bbox(visible),poly:visible});for(const key of keys){if(!grid.has(key))grid.set(key,[]);grid.get(key).push(id);}if(!colors.has(region.fill))colors.set(region.fill,[]);colors.get(region.fill).push(visible);}}
-onProgress('Объединяю одноцветные участки…');const merged=[...colors].map(([fill,polys])=>({fill,poly:unionAll(polys)}));const silhouette=unionAll(merged.map(x=>x.poly));let body='';if(silhouette.length&&merged.length)body+=`<path fill="${merged[0].fill}" fill-rule="evenodd" d="${ringsPath(silhouette,o.width,o.height)}"/>`;for(const {fill,poly}of merged)body+=`<path fill="${fill}" fill-rule="evenodd" d="${ringsPath(poly,o.width,o.height)}"/>`;const bg=o.background==='transparent'?'':`<rect width="100%" height="100%" fill="${o.background}"/>`;return {text:`<svg xmlns="http://www.w3.org/2000/svg" width="${o.width}" height="${o.height}" viewBox="0 0 ${o.width} ${o.height}"><title>Cloth — vector composition</title><desc>Flat vector contours from simulated cloth. Curves adaptively approximated before deformation. No raster, clipping masks or filters.</desc>${bg}${body}</svg>`,triangles:faces.length,fragments:ordered.length,paths:merged.length+1};}
+import { projectFlag } from "./scene.mjs";
+import { polygon } from "./vendor.mjs";
+import { projectCloth, affine, orderPolygons } from "./vector.mjs";
+const snap = (x) => Math.round(x * 1e9) / 1e9;
+const bbox = (poly) => {
+  const b = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const p of poly)
+    for (const r of p)
+      for (const [x, y] of r) {
+        b[0] = Math.min(b[0], x);
+        b[1] = Math.min(b[1], y);
+        b[2] = Math.max(b[2], x);
+        b[3] = Math.max(b[3], y);
+      }
+  return b;
+};
+const overlap = (a, b) =>
+  a[0] < b[2] - 1e-10 && a[2] > b[0] + 1e-10 && a[1] < b[3] - 1e-10 && a[3] > b[1] + 1e-10;
+const unionAll = (items) => {
+  if (!items.length) return [];
+  while (items.length > 1) {
+    const next = [];
+    for (let i = 0; i < items.length; i += 16) next.push(polygon.union(...items.slice(i, i + 16)));
+    items = next;
+  }
+  return items[0];
+};
+function ringsPath(poly, width, height) {
+  const n = (x) => Number(x.toFixed(5));
+  return poly
+    .map((p) =>
+      p
+        .map(
+          (r) =>
+            "M" +
+            r
+              .slice(0, -1)
+              .map(([x, y]) => n(((x + 1) * width) / 2) + " " + n(((1 - y) * height) / 2))
+              .join("L") +
+            "Z",
+        )
+        .join(""),
+    )
+    .join("");
+}
+export function exportFlatSVG(cloth, o, shapes, onProgress = () => {}) {
+  return exportProjectedSVG([{ cloth, points: projectCloth(cloth, o), shapes }], o, onProgress);
+}
+export function exportSceneSVG(flags, o, onProgress = () => {}) {
+  if (!flags.length) throw new Error("Добавьте хотя бы один видимый флаг.");
+  if (flags.some((f) => !f.shapes))
+    throw new Error(
+      "Для SVG все видимые флаги должны быть векторными. Скройте растровые объекты или выберите PNG.",
+    );
+  return exportProjectedSVG(
+    flags.map((f) => ({ cloth: f.cloth, points: projectFlag(f, o), shapes: f.shapes })),
+    o,
+    onProgress,
+  );
+}
+function exportProjectedSVG(items, o, onProgress) {
+  const faces = [],
+    maps = [],
+    regionCache = new Map(),
+    layers = [];
+  for (const { cloth, points: pts, shapes } of items) {
+    const layer = [];
+    layers.push(layer);
+    let regions = regionCache.get(shapes);
+    if (!regions) {
+      regions = [];
+      let sourceCover = [];
+      for (const s of [...shapes].reverse()) {
+        const poly = polygon.difference(s.poly, sourceCover);
+        if (poly.length) regions.push({ fill: s.fill, poly, box: bbox(poly) });
+        sourceCover = polygon.union(sourceCover, s.poly);
+      }
+      regionCache.set(shapes, regions);
+    }
+    for (let i = 0; i < cloth.tri.length; i += 3) {
+      const ids = Array.from(cloth.tri.slice(i, i + 3)),
+        v = ids.map((id) => pts[id]);
+      const area = (v[1][0] - v[0][0]) * (v[2][1] - v[0][1]) - (v[1][1] - v[0][1]) * (v[2][0] - v[0][0]);
+      if (Math.abs(area) < 1e-12) continue;
+      const uv = ids.map((id) => [cloth.uv[id * 2], cloth.uv[id * 2 + 1]]),
+        id = maps.length;
+      maps.push({ uv, m: affine(uv, v), regions });
+      faces.push({ id, v });
+      layer.push(faces[faces.length - 1]);
+    }
+  }
+  if (faces.length > 60000) throw new Error("Слишком подробная сцена. Уменьшите детализацию флагов.");
+  onProgress("Рассчитываю перекрытия складок…");
+  // layered: items are strict back-to-front layers; sort folds inside each layer only.
+  const ordered = (o.layered ? layers.flatMap((layer) => orderPolygons(layer)) : orderPolygons(faces)).reverse(),
+    cache = new Map(),
+    grid = new Map(),
+    pieces = [],
+    colors = new Map();
+  let operations = 0;
+  function cells(b) {
+    const keys = [];
+    const x0 = Math.max(0, Math.min(63, Math.floor((b[0] + 1) * 32))),
+      x1 = Math.max(0, Math.min(63, Math.floor((b[2] + 1) * 32))),
+      y0 = Math.max(0, Math.min(63, Math.floor((b[1] + 1) * 32))),
+      y1 = Math.max(0, Math.min(63, Math.floor((b[3] + 1) * 32)));
+    for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) keys.push(x * 64 + y);
+    return keys;
+  }
+  for (let index = 0; index < ordered.length; index++) {
+    if (index % 300 === 0)
+      onProgress(`Собираю видимые контуры: ${Math.round((index / ordered.length) * 100)}%`);
+    const face = ordered[index];
+    let mapped = cache.get(face.id);
+    if (!mapped) {
+      const { uv, m, regions } = maps[face.id],
+        tri = [[[...uv, uv[0]]]],
+        box = bbox(tri);
+      mapped = [];
+      for (const region of regions) {
+        if (!overlap(box, region.box)) continue;
+        const cut = polygon.intersection(region.poly, tri);
+        if (!cut.length) continue;
+        const poly = cut.map((p) =>
+          p.map((r) =>
+            r.map(([x, y]) => [snap(m[0] * x + m[2] * y + m[4]), snap(m[1] * x + m[3] * y + m[5])]),
+          ),
+        );
+        mapped.push({ fill: region.fill, poly });
+      }
+      cache.set(face.id, mapped);
+    }
+    let ring = face.v.map((v) => [snap(v[0]), snap(v[1])]);
+    ring.push(ring[0]);
+    const clip = [[ring]],
+      clipBox = bbox(clip);
+    if (clipBox[0] >= 1 || clipBox[2] <= -1 || clipBox[1] >= 1 || clipBox[3] <= -1) continue;
+    for (const region of mapped) {
+      let visible = polygon.intersection(region.poly, clip, [
+        [
+          [
+            [-1, -1],
+            [1, -1],
+            [1, 1],
+            [-1, 1],
+            [-1, -1],
+          ],
+        ],
+      ]);
+      if (!visible.length) continue;
+      const b = bbox(visible),
+        keys = cells(b),
+        candidates = new Set();
+      for (const key of keys) for (const id of grid.get(key) || []) candidates.add(id);
+      const blockers = [];
+      for (const id of candidates) {
+        const item = pieces[id];
+        if (item.face !== face.id && overlap(b, item.box)) blockers.push(item.poly);
+      }
+      if (blockers.length) {
+        if ((operations += blockers.length) > 600000)
+          throw new Error("Слишком сложные перекрытия. Выберите меньшую детализацию или другой кадр.");
+        visible = polygon.difference(visible, ...blockers);
+      }
+      if (!visible.length) continue;
+      const id = pieces.length;
+      pieces.push({ face: face.id, box: bbox(visible), poly: visible });
+      for (const key of keys) {
+        if (!grid.has(key)) grid.set(key, []);
+        grid.get(key).push(id);
+      }
+      if (!colors.has(region.fill)) colors.set(region.fill, []);
+      colors.get(region.fill).push(visible);
+    }
+  }
+  onProgress("Объединяю одноцветные участки…");
+  const merged = [...colors].map(([fill, polys]) => ({ fill, poly: unionAll(polys) }));
+  const silhouette = unionAll(merged.map((x) => x.poly));
+  let body = "";
+  if (silhouette.length && merged.length)
+    body += `<path fill="${merged[0].fill}" fill-rule="evenodd" d="${ringsPath(silhouette, o.width, o.height)}"/>`;
+  for (const { fill, poly } of merged)
+    body += `<path fill="${fill}" fill-rule="evenodd" d="${ringsPath(poly, o.width, o.height)}"/>`;
+  const bg =
+    o.background === "transparent" ? "" : `<rect width="100%" height="100%" fill="${o.background}"/>`;
+  return {
+    text: `<svg xmlns="http://www.w3.org/2000/svg" width="${o.width}" height="${o.height}" viewBox="0 0 ${o.width} ${o.height}"><title>Cloth — vector composition</title><desc>Flat vector contours from simulated cloth. Curves adaptively approximated before deformation. No raster, clipping masks or filters.</desc>${bg}${body}</svg>`,
+    triangles: faces.length,
+    fragments: ordered.length,
+    paths: merged.length + 1,
+  };
+}

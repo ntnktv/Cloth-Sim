@@ -14,7 +14,7 @@
 <aside class="panel layers" aria-label="Слои">
   <div class="panel-head">
     <span class="brand">cloth</span>
-    <span id="objectCount" class="count">0 / 12</span>
+    <span id="objectCount" class="count">0 / 50</span>
     <button id="help" class="round" aria-label="Справка">?</button>
   </div>
 
@@ -33,18 +33,35 @@
   </div>
 
   <div class="layers-foot">
-    <button id="demo" class="link">+ демо-флаг</button>
+    <details class="text-editor" open>
+      <summary class="link">▭ прямоугольник</summary>
+      <div class="card">
+        <div class="segments compact" id="rectRatio">
+          <button type="button" data-ratio="1:1">1:1</button>
+          <button type="button" data-ratio="3:2" class="active">3:2</button>
+          <button type="button" data-ratio="2:1">2:1</button>
+          <button type="button" data-ratio="4:1">4:1</button>
+          <button type="button" data-ratio="8:1">8:1</button>
+          <button type="button" data-ratio="2:3">2:3</button>
+        </div>
+        <div class="text-tools">
+          <div class="palette" aria-label="Цвет"></div>
+          <button id="rectAdd" class="pill">добавить</button>
+        </div>
+      </div>
+    </details>
     <details class="text-editor">
-      <summary class="link">+ текст</summary>
+      <summary class="link">T растровый текст</summary>
       <div class="card">
         <textarea id="text" rows="2" aria-label="Текст графики">LET IT
 FLOW.</textarea>
         <div class="text-tools">
-          <input id="ink" type="color" value="#2f7cf6" aria-label="Цвет текста">
+          <div class="palette" aria-label="Цвет текста"></div>
           <button id="makeText" class="pill">добавить</button>
         </div>
       </div>
     </details>
+    <button id="demo" class="link">+ демо-флаг</button>
     <p id="vectorState" class="note" role="status"></p>
     <p id="rendererNotice" class="note" hidden></p>
   </div>
@@ -74,11 +91,7 @@ FLOW.</textarea>
             <option value="2160" selected>до 2160 px</option>
             <option value="4096">до 4096 px</option>
           </select></label>
-          <label class="row">длина<select id="duration">
-            <option value="3">3 сек</option>
-            <option value="5" selected>5 сек</option>
-            <option value="10">10 сек</option>
-          </select></label>
+          <label class="row">длина<span class="sec"><input id="duration" type="number" min="1" max="60" step="1" value="5" aria-label="Длина анимации, секунд"> сек</span></label>
           <label class="row">анимация<select id="format">
             <option value="zip">PNG + α / ZIP</option>
             <option value="video">видео / WebM</option>
@@ -96,6 +109,9 @@ FLOW.</textarea>
         <svg id="selectionOverlay" aria-hidden="true">
           <rect id="selectionBox" fill="none" stroke="#2f7cf6" stroke-width="1.3" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"/>
           <path id="selectionCenter" fill="none" stroke="#2f7cf6" vector-effect="non-scaling-stroke"/>
+          <g id="multiBoxes"></g>
+          <path id="snapGuides" fill="none" stroke="#ff3d8b" stroke-width="1" vector-effect="non-scaling-stroke"/>
+          <rect id="marquee" fill="#2f7cf61a" stroke="#2f7cf6" stroke-width="1" vector-effect="non-scaling-stroke" style="display:none"/>
         </svg>
       </div>
     </div>
@@ -141,7 +157,7 @@ FLOW.</textarea>
   </div>
 </section>
 
-<aside class="panel props" aria-label="Свойства флага">
+<aside class="panel props" id="propsPanel" aria-label="Свойства флага">
   <input id="objectName" class="title-input" type="text" maxlength="80" placeholder="Выберите флаг" aria-label="Название флага">
 
   <div class="group" id="placement">
@@ -150,8 +166,7 @@ FLOW.</textarea>
       <div class="grid2">
         <label class="field"><span>x</span><input id="posX" type="number" step="1"></label>
         <label class="field"><span>y</span><input id="posY" type="number" step="1"></label>
-        <label class="field"><span>z</span><input id="posZ" type="number" step="10"></label>
-        <label class="field"><span>ш</span><input id="objectWidth" type="number" min="1" max="100000" step="1" title="Ширина, px"></label>
+        <label class="field span2"><span>ширина</span><input id="objectWidth" type="number" min="1" max="100000" step="1" title="Ширина, px"></label>
       </div>
       <div class="grid3">
         <label class="field" title="Поворот в плоскости"><span>↻</span><input id="roll" type="number" min="-360" max="360" step="1"></label>
@@ -159,10 +174,26 @@ FLOW.</textarea>
         <label class="field" title="Поворот вокруг X"><span>x°</span><input id="pitch" type="number" min="-180" max="180" step="1"></label>
       </div>
       <div class="row-buttons">
-        <button id="backward" class="chip" title="Дальше по Z">дальше</button>
-        <button id="forward" class="chip" title="Ближе по Z">ближе</button>
+        <button id="layerDown" class="chip" title="На слой ниже · Cmd/Ctrl + [">слой ↓</button>
+        <button id="layerUp" class="chip" title="На слой выше · Cmd/Ctrl + ]">слой ↑</button>
         <button id="front" class="chip" title="Сбросить повороты">0°</button>
       </div>
+    </div>
+  </div>
+
+  <div class="group" id="alignGroup">
+    <div class="group-title">Выравнивание <span class="muted align-hint">к макету</span></div>
+    <div class="align-row">
+      <button data-align="left" title="По левому краю" aria-label="По левому краю"><svg viewBox="0 0 20 20"><path d="M3 2v16"/><rect x="6" y="5" width="10" height="3.5" rx="1"/><rect x="6" y="11.5" width="6" height="3.5" rx="1"/></svg></button>
+      <button data-align="hcenter" title="По центру" aria-label="По центру по горизонтали"><svg viewBox="0 0 20 20"><path d="M10 2v16"/><rect x="4" y="5" width="12" height="3.5" rx="1"/><rect x="6.5" y="11.5" width="7" height="3.5" rx="1"/></svg></button>
+      <button data-align="right" title="По правому краю" aria-label="По правому краю"><svg viewBox="0 0 20 20"><path d="M17 2v16"/><rect x="4" y="5" width="10" height="3.5" rx="1"/><rect x="8" y="11.5" width="6" height="3.5" rx="1"/></svg></button>
+      <button data-align="top" title="По верхнему краю" aria-label="По верхнему краю"><svg viewBox="0 0 20 20"><path d="M2 3h16"/><rect x="5" y="6" width="3.5" height="10" rx="1"/><rect x="11.5" y="6" width="3.5" height="6" rx="1"/></svg></button>
+      <button data-align="vcenter" title="По центру" aria-label="По центру по вертикали"><svg viewBox="0 0 20 20"><path d="M2 10h16"/><rect x="5" y="4" width="3.5" height="12" rx="1"/><rect x="11.5" y="6.5" width="3.5" height="7" rx="1"/></svg></button>
+      <button data-align="bottom" title="По нижнему краю" aria-label="По нижнему краю"><svg viewBox="0 0 20 20"><path d="M2 17h16"/><rect x="5" y="4" width="3.5" height="10" rx="1"/><rect x="11.5" y="8" width="3.5" height="6" rx="1"/></svg></button>
+    </div>
+    <div class="align-row distribute">
+      <button data-align="dist-x" title="Распределить по горизонтали" aria-label="Распределить по горизонтали"><svg viewBox="0 0 20 20"><path d="M2 3v14M18 3v14"/><rect x="7.5" y="6" width="5" height="8" rx="1"/></svg><span>интервалы ↔</span></button>
+      <button data-align="dist-y" title="Распределить по вертикали" aria-label="Распределить по вертикали"><svg viewBox="0 0 20 20"><path d="M3 2h14M3 18h14"/><rect x="6" y="7.5" width="8" height="5" rx="1"/></svg><span>интервалы ↕</span></button>
     </div>
   </div>
 
@@ -176,8 +207,9 @@ FLOW.</textarea>
     </div>
   </div>
 
-  <div class="group">
+  <div class="group" id="windGroup">
     <div class="group-title">Ветер <span id="windDescription" class="muted">слева → направо</span></div>
+    <label class="toggle block wind-toggle" title="Одни настройки ветра для всех флагов; у каждого флага остаётся своя фаза порывов"><input id="globalWind" type="checkbox" checked><span>общий для всех флагов</span></label>
     <div class="segments" id="wind">
       <button data-value="left" class="active" aria-label="Ветер слева">→</button>
       <button data-value="top" aria-label="Ветер сверху">↓</button>
@@ -217,14 +249,16 @@ FLOW.</textarea>
 <button class="close" id="closeHelp" aria-label="Закрыть">×</button>
 <h2>Как это работает</h2>
 <h3>Слои</h3>
-<p>Загрузите до 12 изображений или MP4 сразу — кнопкой или перетаскиванием на холст. Клик по флагу или строке слева выбирает его. Кнопка слева от слоя останавливает его ткань и видео на текущем кадре; глаз — скрывает. Скрытые флаги не экспортируются.</p>
+<p>Загрузите до 50 изображений или MP4 сразу — кнопкой или перетаскиванием на холст. Порядок слоёв задаётся перетаскиванием в списке: верхний слой — спереди. Флаги разных слоёв никогда не пересекаются; складки внутри одного флага перекрываются честно. «Прямоугольник» создаёт векторную плашку из палитры — её не нужно готовить в Figma.</p>
+<h3>Выделение</h3>
+<p>Клик выбирает флаг, Shift или Cmd/Ctrl — добавляет к выделению; рамкой по пустому месту холста можно выделить несколько. Выделенные флаги двигаются вместе, а настройки в правой панели меняются у всех сразу (разные значения показаны «—»). Выравнивание: один флаг — к макету, несколько — к их общим границам; от трёх флагов доступны интервалы.</p>
 <h3>Холст</h3>
-<p>Перетаскивайте флаги мышью. Угол рамки — пропорциональный размер (противоположный угол остаётся на месте); чуть снаружи угла — поворот, Shift — шаг 15°, Escape — отмена. Ширина и высота задают точный формат SVG; «вписать флаги» пропорционально масштабирует композицию при смене формата. X — вправо, Y — вниз, больший Z — ближе.</p>
+<p>При перетаскивании флаги прилипают к краям и центру макета и к другим флагам; Alt — без прилипания. Угол рамки — пропорциональный размер, чуть снаружи угла — поворот, Shift — шаг 15°, Escape — отмена. Ширина и высота задают точный формат SVG; «вписать флаги» масштабирует композицию при смене формата.</p>
 <h3>Физика</h3>
-<p>Крепление, ветер и ткань настраиваются для выбранного флага. «Другой порыв» меняет его движение; дубликат получает собственный порыв. Общая пауза останавливает сцену, продолжение и шаг кадра действуют только на включённые слои. ↺ в панели слоёв возвращает исходную физику всех флагов, сохраняя положение и размеры. Физических столкновений разных флагов нет; самоколлизия одного флага экспериментальная.</p>
+<p>Ветер по умолчанию общий для всей сцены (переключатель в разделе «Ветер»); у каждого флага при этом своя фаза порывов. Крепление и ткань настраиваются для выбранных флагов. «Другой порыв» меняет его движение; дубликат получает собственный порыв. Общая пауза останавливает сцену, продолжение и шаг кадра действуют только на включённые слои. ↺ в панели слоёв возвращает исходную физику всех флагов, сохраняя положение и размеры. Физических столкновений разных флагов нет; самоколлизия одного флага экспериментальная.</p>
 <h3>Экспорт</h3>
-<p>SVG учитывает перекрытия между флагами и внутри складок. Для SVG нужны векторные заливки у всех видимых флагов: текст и обводки переведите в кривые, видео и растр скройте. PNG-секвенция — 30 кадров/с с прозрачностью в ZIP; видео пишется с фоном в реальном времени. MP4 до 250 МБ, лучше H.264.</p>
-<p class="muted">Space — пауза · стрелки — сдвиг · Shift — ×10. Всё считается на вашем устройстве, сцена не сохраняется после перезагрузки.</p>
+<p>SVG учитывает перекрытия между флагами и внутри складок. Для SVG нужны векторные заливки у всех видимых флагов: текст и обводки переведите в кривые, видео и растр скройте. Длина анимации — от 1 до 60 секунд. PNG-секвенция — 30 кадров/с с прозрачностью в ZIP; видео пишется с фоном в реальном времени. MP4 до 250 МБ, лучше H.264.</p>
+<p class="muted">Space — пауза · стрелки — сдвиг (Shift ×10) · Cmd/Ctrl+A — выделить всё · Cmd/Ctrl+D — копия · Delete — удалить · Cmd/Ctrl+[ ] — слой ниже/выше. Всё считается на вашем устройстве, сцена не сохраняется после перезагрузки.</p>
 </dialog>
 
 <dialog id="vectorDialog" class="vector-dialog">

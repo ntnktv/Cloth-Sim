@@ -225,3 +225,40 @@ body.exporting .resize-handle,body.exporting .rotation-handle{pointer-events:non
   .stage{height:56vh;flex:none}
   .panel{overflow:visible}
 }
+
+/* v2: layers, palette, align, multi-select */
+.span2{grid-column:span 2}
+.field>span{white-space:nowrap}
+.segments.compact button{padding:5px 2px;font-size:11px}
+.palette{display:flex;gap:5px;flex-wrap:wrap}
+.palette .swatch{width:20px;height:20px;border:0}
+.text-editor .card .text-tools{margin-top:10px}
+.text-editor+.text-editor{margin-top:-2px}
+.layers-foot{gap:6px}
+.object-entry{cursor:grab}
+.object-entry.dragging-layer{opacity:.4}
+.object-entry.drop-before{box-shadow:0 -2px 0 var(--accent)}
+.object-entry.drop-after{box-shadow:0 2px 0 var(--accent)}
+.object-list{max-height:min(46vh,520px);overflow:auto;scrollbar-width:thin;padding:2px 0}
+.align-row{display:grid;grid-template-columns:repeat(6,1fr);gap:2px;background:var(--card);border-radius:12px;padding:3px}
+.align-row button{height:30px;border-radius:9px;display:grid;place-items:center;color:#555}
+.align-row button:hover:not(:disabled){background:var(--panel);color:var(--text)}
+.align-row svg{width:18px;height:18px;fill:currentColor;stroke:currentColor;stroke-width:1.3}
+.align-row svg rect{stroke:none}
+.align-row.distribute{grid-template-columns:1fr 1fr;display:none}
+.align-row.distribute button{display:flex;gap:6px;justify-content:center;font-size:11.5px}
+.can-distribute .align-row.distribute{display:grid}
+.is-multi .align-hint{font-size:0}
+.is-multi .align-hint::after{content:"к выделению";font-size:11px}
+.wind-toggle{margin:0 0 2px}
+.sec{display:inline-flex;align-items:center;gap:4px;background:var(--panel);border-radius:var(--r-pill);padding:5px 12px}
+.sec input{width:36px;text-align:right}
+.multi-box{fill:none;stroke:var(--accent);stroke-width:1;stroke-opacity:.55;vector-effect:non-scaling-stroke}
+#frame[data-gesture=marquee]{cursor:crosshair}
+input::placeholder{color:var(--muted)}
+.text-editor .text-tools{flex-direction:column;align-items:stretch;gap:8px}
+.text-editor .text-tools .pill{width:100%}
+.palette{justify-content:space-between}
+.palette .swatch{width:26px;height:26px}
+.field>span{margin-right:2px}
+body.reordering,body.reordering *{cursor:grabbing!important;user-select:none}
