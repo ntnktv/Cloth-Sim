@@ -117,7 +117,7 @@ FLOW.</textarea>
     </div>
     <div id="dropOverlay">Отпустите, чтобы добавить</div>
     <div id="status" role="status" aria-live="polite"></div>
-    <span id="meshInfo" class="mesh-info"></span>
+    <span class="mesh-info"><span id="meshInfo"></span> · <span id="fps"></span></span>
   </div>
 
   <div class="bottombar">
@@ -132,7 +132,6 @@ FLOW.</textarea>
         <option value="1" selected>1×</option>
         <option value="1.5">1.5×</option>
       </select>
-      <span id="fps" class="muted fps"></span>
     </div>
     <div class="bar view">
       <span id="frameInfo" hidden>1920 × 1080</span>
@@ -143,17 +142,24 @@ FLOW.</textarea>
         <option value="2">200%</option>
       </select>
       <label class="toggle"><input id="wire" type="checkbox"><span>сетка</span></label>
+      <label class="toggle" title="Освещение влияет только на растр"><input id="shade" type="checkbox"><span>свет</span></label>
+      <span class="swatch-sep"></span>
+      <div id="background" class="swatches">
+        <button data-bg="transparent" class="swatch checker active" aria-label="Прозрачный фон" title="Прозрачный"></button>
+        <button data-bg="#ffffff" class="swatch light" aria-label="Белый фон" title="Белый"></button>
+        <button data-bg="#171817" class="swatch dark" aria-label="Тёмный фон" title="Тёмный"></button>
+        <span class="swatch-sep"></span>
+        <button data-bg="#FF3629" class="swatch" style="background:#FF3629" aria-label="Фон FF3629" title="FF3629"></button>
+        <button data-bg="#FB8DED" class="swatch" style="background:#FB8DED" aria-label="Фон FB8DED" title="FB8DED"></button>
+        <button data-bg="#60C9F1" class="swatch" style="background:#60C9F1" aria-label="Фон 60C9F1" title="60C9F1"></button>
+        <button data-bg="#FF6A00" class="swatch" style="background:#FF6A00" aria-label="Фон FF6A00" title="FF6A00"></button>
+        <button data-bg="#00804D" class="swatch" style="background:#00804D" aria-label="Фон 00804D" title="00804D"></button>
+        <button data-bg="#FFC800" class="swatch" style="background:#FFC800" aria-label="Фон FFC800" title="FFC800"></button>
+      </div>
+
       <input id="previewHeight" type="range" min="280" max="1000" step="20" value="520" hidden aria-hidden="true" tabindex="-1">
     </div>
-    <div class="bar">
-      <div id="background" class="swatches">
-        <button data-bg="transparent" class="swatch checker active" aria-label="Прозрачный фон"></button>
-        <button data-bg="#f0efeb" class="swatch light" aria-label="Светлый фон"></button>
-        <button data-bg="#171817" class="swatch dark" aria-label="Тёмный фон"></button>
-        <input type="color" id="bgColor" value="#e6e2d7" aria-label="Свой цвет фона">
-      </div>
-      <label class="toggle" title="Освещение влияет только на растр"><input id="shade" type="checkbox"><span>свет</span></label>
-    </div>
+
   </div>
 </section>
 

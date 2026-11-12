@@ -262,3 +262,9 @@ input::placeholder{color:var(--muted)}
 .palette .swatch{width:26px;height:26px}
 .field>span{margin-right:2px}
 body.reordering,body.reordering *{cursor:grabbing!important;user-select:none}
+.swatches .swatch{width:22px;height:22px}
+.swatch.light{background:#fff}
+.swatch-sep{width:1px;height:18px;background:var(--line);margin:0 2px}
+.swatches{gap:4px;padding:0 2px}
+.swatches .swatch{width:20px;height:20px}
+.bottombar .view .toggle{padding:0 4px}

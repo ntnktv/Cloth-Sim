@@ -767,9 +767,6 @@ $("background").onclick = (e) => {
   const b = e.target.closest("[data-bg]");
   if (b && !busy) setBackground(b.dataset.bg);
 };
-$("bgColor").oninput = () => {
-  if (!busy) setBackground($("bgColor").value);
-};
 for (const key of ["shade", "wire"])
   $(key).onchange = () => {
     if (!busy) {
