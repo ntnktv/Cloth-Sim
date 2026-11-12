@@ -1,36 +1,244 @@
 <!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#181918"><title>Cloth — композиции в векторе</title><meta name="description" content="Композиции из нескольких независимых флагов: положение в 3D, свой формат холста и экспорт SVG."><link rel="stylesheet" href="style.css"></head><body>
-<header><a class="brand" href="./">cloth<span>VECTOR LAB / 02</span></a><div class="header-right"><span class="local"><i></i> Всё на вашем устройстве</span><button id="help" class="icon-button" aria-label="О программе">?</button></div></header>
-<main><aside class="controls">
-<section><div class="section-title"><span>01 / ФЛАГИ</span><span id="objectCount">0 / 12</span></div>
-<label class="upload"><input type="file" id="file" accept="image/png,image/jpeg,image/webp,image/svg+xml,video/mp4,.mp4" multiple><span class="upload-icon">＋</span><strong>Добавить изображения / видео</strong><small>SVG, PNG, JPG, WebP или MP4</small></label>
-<div id="objectList" class="object-list" aria-label="Флаги композиции"></div>
-<div class="object-actions"><button id="duplicate" title="Независимая копия выбранного флага">Дублировать</button><button id="deleteObject">Удалить</button></div>
-<button id="demo" class="text-button">＋ Добавить демо-флаг</button>
-<div class="object-actions"><button id="resetAllPhysics" title="Исходные ветер, ткань, закрепление слева и детализация 40 для всех слоёв, включая скрытые">↺ Сбросить физику всех слоёв</button></div>
-<p id="vectorState" class="vector-state" role="status"></p></section>
-<section id="placement"><div class="section-title">ПОЛОЖЕНИЕ ВЫБРАННОГО ФЛАГА</div>
-<label class="name-label">Название<input id="objectName" type="text" maxlength="80"></label>
-<div class="number-grid"><label>X · центр<input id="posX" type="number" step="1"></label><label>Y · центр<input id="posY" type="number" step="1"></label><label>Z · глубина<input id="posZ" type="number" step="10"></label><label>Ширина, px<input id="objectWidth" type="number" min="1" max="100000" step="1"></label></div>
-<p class="hint coordinate-hint">X — вправо, Y — вниз. Больше Z — ближе. Пропорции флага сохраняются.</p>
-<div class="object-actions"><button id="backward">Дальше −Z</button><button id="forward">Ближе +Z</button></div>
-<div class="number-grid angles"><label>Поворот, °<input id="roll" type="number" min="-360" max="360" step="1"></label><label>Вокруг Y, °<input id="yaw" type="number" min="-180" max="180" step="1"></label><label>Вокруг X, °<input id="pitch" type="number" min="-180" max="180" step="1"></label></div>
-<button id="front" class="text-button">Сбросить повороты</button>
-</section>
-<section><div class="section-title">02 / ФИКСАЦИЯ</div><p class="hint">Какой край держит графику?</p><div class="segments" id="pin"><button data-value="left" class="active">Слева</button><button data-value="top">Сверху</button><button data-value="right">Справа</button><button data-value="bottom">Снизу</button></div></section>
-<section><div class="section-title">03 / ВЕТЕР</div><div class="control-label">Дует от края <span id="windDescription">слева → направо</span></div><div class="segments" id="wind"><button data-value="left" class="active" aria-label="Ветер слева">→</button><button data-value="top" aria-label="Ветер сверху">↓</button><button data-value="right" aria-label="Ветер справа">←</button><button data-value="bottom" aria-label="Ветер снизу">↑</button></div><div id="windSliders"></div></section>
-<section><div class="section-title">04 / ТКАНЬ <button id="resetParams" class="text-button">Сбросить</button></div><div class="presets" id="presets"><button data-preset="silk" class="active">Шёлк</button><button data-preset="flag">Флаг</button><button data-preset="paper">Плотная</button></div><div id="clothSliders"></div><label class="check"><input id="collision" type="checkbox"><span>Самоколлизия <small>экспериментальная</small></span></label></section>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#ececea">
+<title>Cloth — композиции в векторе</title>
+<meta name="description" content="Композиции из нескольких независимых флагов: положение в 3D, свой формат холста и экспорт SVG.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="app">
 
-<section><div class="section-title">ДВИЖЕНИЕ ВЫБРАННОГО ФЛАГА</div><button id="newGust">↻ Другой порыв</button><p class="vector-note">У каждого флага собственное поле порывов и настройки ткани.</p><label class="select-row">Детализация <select id="resolution"><option value="24">Лёгкая · 24</option><option value="40" selected>Быстро · 40</option><option value="56">Баланс · 56</option><option value="80">Точно · 80</option></select></label>
-<details class="text-editor"><summary>Добавить растровый текст</summary><textarea id="text" rows="2" aria-label="Текст графики">LET IT
-FLOW.</textarea><div class="text-tools"><label>Цвет <input id="ink" type="color" value="#d7ff58"></label><button id="makeText">Добавить</button></div></details></section></aside>
-<div class="workspace"><div class="workspace-top"><div><span class="eyebrow">КОМПОЗИЦИЯ / 02</span><h1>Несколько флагов. Один кадр.</h1></div><span id="meshInfo" class="scene-meta"></span></div>
-<form id="sceneForm" class="scene-toolbar"><label>Ширина, px<input id="sceneWidth" type="number" min="64" max="50000" step="1" value="1920" required></label><span class="dimension-cross">×</span><label>Высота, px<input id="sceneHeight" type="number" min="64" max="50000" step="1" value="1080" required></label><button type="button" id="swapSize" aria-label="Поменять ширину и высоту">⇄</button><button type="submit">Применить</button><label class="check resize-check"><input id="scaleScene" type="checkbox"><span>Масштабировать флаги</span></label></form>
-<div class="preview-toolbar"><span id="frameInfo">1920 × 1080</span><label>Окно <input id="previewHeight" type="range" min="280" max="1000" step="20" value="520" aria-label="Высота окна превью"></label><label>Вид <select id="previewZoom" aria-label="Масштаб превью"><option value="0.5">50%</option><option value="1" selected>Вписать</option><option value="1.5">150%</option><option value="2">200%</option></select></label><label class="check"><input id="wire" type="checkbox"><span>Сетка</span></label></div>
-<div class="stage" id="stage"><div id="frameWrap"><div id="frame"><canvas id="canvas" aria-label="Холст композиции. Перетащите флаг для перемещения, угол рамки — для изменения размера."></canvas><svg id="selectionOverlay" aria-hidden="true"><rect id="selectionBox" fill="none" stroke="#d7ff58" stroke-width="1.3" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"/><path id="selectionCenter" fill="none" stroke="#d7ff58" vector-effect="non-scaling-stroke"/></svg></div></div><div id="dropOverlay">Добавить изображения / видео в композицию</div></div>
-<p id="rendererNotice" class="vector-note" hidden></p><div class="transport"><div class="play-controls"><button id="play" class="play" aria-label="Пауза">Ⅱ</button><button id="restart" class="icon-button" title="Начать все флаги заново" aria-label="Начать все флаги заново">↺</button><button id="step" class="icon-button" aria-label="Один кадр">▷|</button><span id="time" class="time">00:00.00</span><span id="liveLabel" class="scene-meta">Симуляция идёт</span></div><label class="speed-label">Скорость <select id="speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="1.5">1.5×</option></select></label><span id="fps" class="fps"></span></div>
-<div class="scene-bottom"><div class="background-row"><span>Фон композиции</span><div id="background"><button data-bg="transparent" class="swatch checker active" aria-label="Прозрачный фон"></button><button data-bg="#f0efeb" class="swatch light" aria-label="Светлый фон"></button><button data-bg="#171817" class="swatch dark" aria-label="Тёмный фон"></button><input type="color" id="bgColor" value="#e6e2d7" aria-label="Свой цвет фона"></div></div><label class="check"><input id="shade" type="checkbox"><span>Освещение · только растр</span></label></div>
-<div class="export-panel"><div><span class="eyebrow">ВСЯ КОМПОЗИЦИЯ — В МАКЕТ</span><h2>Сохраните сцену.</h2><p id="exportInfo">SVG точно в размере холста.</p></div><div class="export-controls"><div class="export-options"><label>Растр<select id="exportSize"><option value="native">Размер холста</option><option value="1080">До 1080 px</option><option value="2160" selected>До 2160 px</option><option value="4096">До 4096 px</option></select></label><label>Длина<select id="duration"><option value="3">3 сек</option><option value="5" selected>5 сек</option><option value="10">10 сек</option></select></label><label>Анимация<select id="format"><option value="zip">PNG + α / ZIP</option><option value="video">Видео / WebM</option></select></label></div><div class="export-buttons"><button id="svg" class="primary">↓ SVG-композиция</button><button id="png">↓ PNG-кадр</button><button id="animate">↓ Анимация</button></div></div></div>
-<div id="status" role="status" aria-live="polite"></div><p class="vector-note">Перетаскивайте флаги по холсту. Угол рамки — размер; снаружи угла — поворот. Shift — шаг 15°, Escape — отмена. Для SVG нужны векторные заливки у всех видимых флагов. Текст и обводки переведите в кривые. Скрытые флаги не экспортируются.</p><footer><span>ФИЗИКА ТКАНИ · ОБЩАЯ ГЛУБИНА · ЧИСТЫЙ SVG</span><span>Space — пауза / Стрелки — сдвиг / Shift — ×10</span></footer></div></main>
-<dialog id="helpDialog"><button class="close" id="closeHelp" aria-label="Закрыть">×</button><span class="eyebrow">КОМПОЗИЦИИ</span><h2>Соберите флаги в сцену.</h2><p>Можно загрузить несколько изображений и MP4 сразу. MP4 воспроизводится по кругу без звука и деформируется как изображение. Пауза, скорость и перезапуск управляют также видео. MP4 доступен в PNG и анимации; для SVG скройте видеослои. Максимальный размер MP4 — 250 МБ; поддержка кодека зависит от браузера (рекомендуется H.264). Клик по флагу или строке слева выбирает его. Потяните за любой угол рамки, чтобы пропорционально изменить размер. Противоположный угол остаётся на месте. Для поворота потяните чуть снаружи любого угла рамки: курсор станет изогнутой стрелкой. Shift — шаг 15°. Escape отменяет перетягивание или поворот. Перетаскивание самого флага меняет X/Y; глубина Z и повороты настраиваются слева. Положительный Z приближает флаг.</p><p>Ширина и высота задают точный формат SVG. Размер окна превью и его масштаб не меняют композицию. При изменении формата флаги сохраняют координаты; включите «Масштабировать флаги», чтобы пропорционально вписать всю композицию.</p><p>Ветер и ткань настраиваются для выбранного флага. «Другой порыв» меняет его движение; дубликат получает собственный порыв. Кнопка слева от каждого слоя останавливает его ткань и видео на текущем кадре. Общая пауза останавливает всю сцену; продолжение и шаг кадра действуют только на включённые слои. Локальная пауза сохраняется при экспорте анимации. «Сбросить физику всех слоёв» возвращает исходные ветер, ткань, закрепление слева и детализацию 40 у всех флагов, включая скрытые, и начинает движение заново. Положение, размеры, повороты и индивидуальные порывы сохраняются.</p><p>SVG учитывает перекрытия между флагами и внутри складок. Физических столкновений разных флагов нет: поверхности могут проходить друг через друга. Самоколлизия одного флага экспериментальная.</p><p>PNG-секвенция: 30 кадров/с, прозрачность, ZIP. Видео записывается с фоном в реальном времени. Сцена не сохраняется после перезагрузки страницы.</p></dialog>
-<dialog id="vectorDialog" class="vector-dialog"><button id="closeVector" class="close" aria-label="Закрыть сравнение">×</button><span class="eyebrow">ЗАФИКСИРОВАННЫЙ КАДР</span><h2>Проверка вектора.</h2><p id="vectorStats"></p><div class="vector-compare"><figure><figcaption>PNG · текущая сетка, без света</figcaption><div class="compare-image checker"><img id="rasterImage" alt="Растровый кадр для сравнения"></div></figure><figure><figcaption>SVG · векторные фрагменты</figcaption><div class="compare-image checker"><img id="vectorImage" alt="Результат векторного экспорта"></div></figure></div><p>Файл содержит обычные векторные контуры без растровых вставок и обтравок по треугольникам. Кривые аппроксимируются с высокой точностью. Проверьте импорт в Figma на вашем исходнике.</p><a id="downloadVector" class="primary" download="cloth-composition.svg">↓ Скачать SVG</a></dialog><script type="module" src="app.mjs"></script></body></html>
+<aside class="panel layers" aria-label="Слои">
+  <div class="panel-head">
+    <span class="brand">cloth</span>
+    <span id="objectCount" class="count">0 / 12</span>
+    <button id="help" class="round" aria-label="Справка">?</button>
+  </div>
+
+  <label class="add">
+    <input type="file" id="file" accept="image/png,image/jpeg,image/webp,image/svg+xml,video/mp4,.mp4" multiple>
+    <span class="add-plus">+</span>
+    <span class="add-text">добавить<small>svg, png, jpg, webp, mp4</small></span>
+  </label>
+
+  <div id="objectList" class="object-list" aria-label="Флаги композиции"></div>
+
+  <div class="layer-actions">
+    <button id="duplicate" class="pill" title="Независимая копия выбранного флага">копия</button>
+    <button id="deleteObject" class="pill">удалить</button>
+    <button id="resetAllPhysics" class="pill square" title="Сбросить физику всех слоёв: ветер, ткань, крепление слева, детализация 40" aria-label="Сбросить физику всех слоёв">↺</button>
+  </div>
+
+  <div class="layers-foot">
+    <button id="demo" class="link">+ демо-флаг</button>
+    <details class="text-editor">
+      <summary class="link">+ текст</summary>
+      <div class="card">
+        <textarea id="text" rows="2" aria-label="Текст графики">LET IT
+FLOW.</textarea>
+        <div class="text-tools">
+          <input id="ink" type="color" value="#2f7cf6" aria-label="Цвет текста">
+          <button id="makeText" class="pill">добавить</button>
+        </div>
+      </div>
+    </details>
+    <p id="vectorState" class="note" role="status"></p>
+    <p id="rendererNotice" class="note" hidden></p>
+  </div>
+</aside>
+
+<section class="center">
+  <div class="topbar">
+    <form id="sceneForm" class="bar">
+      <label class="field mini"><span>ш</span><input id="sceneWidth" type="number" min="64" max="50000" step="1" value="1920" required aria-label="Ширина холста, px"></label>
+      <button type="button" id="swapSize" class="ghost" aria-label="Поменять ширину и высоту" title="Поменять местами">⇄</button>
+      <label class="field mini"><span>в</span><input id="sceneHeight" type="number" min="64" max="50000" step="1" value="1080" required aria-label="Высота холста, px"></label>
+      <button type="submit" class="pill">применить</button>
+      <label class="toggle" title="Пропорционально вписать флаги в новый формат"><input id="scaleScene" type="checkbox"><span>вписать флаги</span></label>
+    </form>
+
+
+    <details class="export" id="exportMenu">
+      <summary class="primary">Экспорт</summary>
+      <div class="popover">
+        <p id="exportInfo" class="muted">SVG точно в размере холста.</p>
+        <button id="svg" class="primary wide">SVG-композиция</button>
+        <button id="png" class="pill wide">PNG-кадр</button>
+        <div class="card export-options">
+          <label class="row">растр<select id="exportSize">
+            <option value="native">размер холста</option>
+            <option value="1080">до 1080 px</option>
+            <option value="2160" selected>до 2160 px</option>
+            <option value="4096">до 4096 px</option>
+          </select></label>
+          <label class="row">длина<select id="duration">
+            <option value="3">3 сек</option>
+            <option value="5" selected>5 сек</option>
+            <option value="10">10 сек</option>
+          </select></label>
+          <label class="row">анимация<select id="format">
+            <option value="zip">PNG + α / ZIP</option>
+            <option value="video">видео / WebM</option>
+          </select></label>
+        </div>
+        <button id="animate" class="pill wide">Анимация</button>
+      </div>
+    </details>
+  </div>
+
+  <div class="stage" id="stage">
+    <div id="frameWrap">
+      <div id="frame">
+        <canvas id="canvas" aria-label="Холст композиции. Перетащите флаг для перемещения, угол рамки — для изменения размера."></canvas>
+        <svg id="selectionOverlay" aria-hidden="true">
+          <rect id="selectionBox" fill="none" stroke="#2f7cf6" stroke-width="1.3" stroke-dasharray="5 4" vector-effect="non-scaling-stroke"/>
+          <path id="selectionCenter" fill="none" stroke="#2f7cf6" vector-effect="non-scaling-stroke"/>
+        </svg>
+      </div>
+    </div>
+    <div id="dropOverlay">Отпустите, чтобы добавить</div>
+    <div id="status" role="status" aria-live="polite"></div>
+    <span id="meshInfo" class="mesh-info"></span>
+  </div>
+
+  <div class="bottombar">
+    <div class="bar transport">
+      <button id="play" class="play" aria-label="Пауза"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 3H7V13H4ZM9 3H12V13H9Z"/></svg></button>
+      <button id="restart" class="ghost" title="Начать заново" aria-label="Начать все флаги заново">↺</button>
+      <button id="step" class="ghost" title="Один кадр" aria-label="Один кадр">▷|</button>
+      <span id="time" class="time">00:00.00</span>
+      <span id="liveLabel" hidden>Симуляция идёт</span>
+      <select id="speed" aria-label="Скорость">
+        <option value="0.5">0.5×</option>
+        <option value="1" selected>1×</option>
+        <option value="1.5">1.5×</option>
+      </select>
+      <span id="fps" class="muted fps"></span>
+    </div>
+    <div class="bar view">
+      <span id="frameInfo" hidden>1920 × 1080</span>
+      <select id="previewZoom" aria-label="Масштаб превью">
+        <option value="0.5">50%</option>
+        <option value="1" selected>по окну</option>
+        <option value="1.5">150%</option>
+        <option value="2">200%</option>
+      </select>
+      <label class="toggle"><input id="wire" type="checkbox"><span>сетка</span></label>
+      <input id="previewHeight" type="range" min="280" max="1000" step="20" value="520" hidden aria-hidden="true" tabindex="-1">
+    </div>
+    <div class="bar">
+      <div id="background" class="swatches">
+        <button data-bg="transparent" class="swatch checker active" aria-label="Прозрачный фон"></button>
+        <button data-bg="#f0efeb" class="swatch light" aria-label="Светлый фон"></button>
+        <button data-bg="#171817" class="swatch dark" aria-label="Тёмный фон"></button>
+        <input type="color" id="bgColor" value="#e6e2d7" aria-label="Свой цвет фона">
+      </div>
+      <label class="toggle" title="Освещение влияет только на растр"><input id="shade" type="checkbox"><span>свет</span></label>
+    </div>
+  </div>
+</section>
+
+<aside class="panel props" aria-label="Свойства флага">
+  <input id="objectName" class="title-input" type="text" maxlength="80" placeholder="Выберите флаг" aria-label="Название флага">
+
+  <div class="group" id="placement">
+    <div class="group-title">Положение</div>
+    <div class="card">
+      <div class="grid2">
+        <label class="field"><span>x</span><input id="posX" type="number" step="1"></label>
+        <label class="field"><span>y</span><input id="posY" type="number" step="1"></label>
+        <label class="field"><span>z</span><input id="posZ" type="number" step="10"></label>
+        <label class="field"><span>ш</span><input id="objectWidth" type="number" min="1" max="100000" step="1" title="Ширина, px"></label>
+      </div>
+      <div class="grid3">
+        <label class="field" title="Поворот в плоскости"><span>↻</span><input id="roll" type="number" min="-360" max="360" step="1"></label>
+        <label class="field" title="Поворот вокруг Y"><span>y°</span><input id="yaw" type="number" min="-180" max="180" step="1"></label>
+        <label class="field" title="Поворот вокруг X"><span>x°</span><input id="pitch" type="number" min="-180" max="180" step="1"></label>
+      </div>
+      <div class="row-buttons">
+        <button id="backward" class="chip" title="Дальше по Z">дальше</button>
+        <button id="forward" class="chip" title="Ближе по Z">ближе</button>
+        <button id="front" class="chip" title="Сбросить повороты">0°</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="group">
+    <div class="group-title">Крепление</div>
+    <div class="segments" id="pin">
+      <button data-value="left" class="active">слева</button>
+      <button data-value="top">сверху</button>
+      <button data-value="right">справа</button>
+      <button data-value="bottom">снизу</button>
+    </div>
+  </div>
+
+  <div class="group">
+    <div class="group-title">Ветер <span id="windDescription" class="muted">слева → направо</span></div>
+    <div class="segments" id="wind">
+      <button data-value="left" class="active" aria-label="Ветер слева">→</button>
+      <button data-value="top" aria-label="Ветер сверху">↓</button>
+      <button data-value="right" aria-label="Ветер справа">←</button>
+      <button data-value="bottom" aria-label="Ветер снизу">↑</button>
+    </div>
+    <div class="card sliders" id="windSliders"></div>
+  </div>
+
+  <div class="group">
+    <div class="group-title">Ткань <button id="resetParams" class="link">сбросить</button></div>
+    <div class="segments" id="presets">
+      <button data-preset="silk" class="active">шёлк</button>
+      <button data-preset="flag">флаг</button>
+      <button data-preset="paper">плотная</button>
+    </div>
+    <div class="card sliders" id="clothSliders"></div>
+    <label class="toggle block"><input id="collision" type="checkbox"><span>самоколлизия <small>beta</small></span></label>
+  </div>
+
+  <div class="group">
+    <div class="group-title">Движение</div>
+    <div class="card">
+      <label class="row">детализация<select id="resolution">
+        <option value="24">24 · лёгкая</option>
+        <option value="40" selected>40 · быстро</option>
+        <option value="56">56 · баланс</option>
+        <option value="80">80 · точно</option>
+      </select></label>
+    </div>
+    <button id="newGust" class="pill wide">↻ другой порыв</button>
+  </div>
+</aside>
+</main>
+
+<dialog id="helpDialog">
+<button class="close" id="closeHelp" aria-label="Закрыть">×</button>
+<h2>Как это работает</h2>
+<h3>Слои</h3>
+<p>Загрузите до 12 изображений или MP4 сразу — кнопкой или перетаскиванием на холст. Клик по флагу или строке слева выбирает его. Кнопка слева от слоя останавливает его ткань и видео на текущем кадре; глаз — скрывает. Скрытые флаги не экспортируются.</p>
+<h3>Холст</h3>
+<p>Перетаскивайте флаги мышью. Угол рамки — пропорциональный размер (противоположный угол остаётся на месте); чуть снаружи угла — поворот, Shift — шаг 15°, Escape — отмена. Ширина и высота задают точный формат SVG; «вписать флаги» пропорционально масштабирует композицию при смене формата. X — вправо, Y — вниз, больший Z — ближе.</p>
+<h3>Физика</h3>
+<p>Крепление, ветер и ткань настраиваются для выбранного флага. «Другой порыв» меняет его движение; дубликат получает собственный порыв. Общая пауза останавливает сцену, продолжение и шаг кадра действуют только на включённые слои. ↺ в панели слоёв возвращает исходную физику всех флагов, сохраняя положение и размеры. Физических столкновений разных флагов нет; самоколлизия одного флага экспериментальная.</p>
+<h3>Экспорт</h3>
+<p>SVG учитывает перекрытия между флагами и внутри складок. Для SVG нужны векторные заливки у всех видимых флагов: текст и обводки переведите в кривые, видео и растр скройте. PNG-секвенция — 30 кадров/с с прозрачностью в ZIP; видео пишется с фоном в реальном времени. MP4 до 250 МБ, лучше H.264.</p>
+<p class="muted">Space — пауза · стрелки — сдвиг · Shift — ×10. Всё считается на вашем устройстве, сцена не сохраняется после перезагрузки.</p>
+</dialog>
+
+<dialog id="vectorDialog" class="vector-dialog">
+<button id="closeVector" class="close" aria-label="Закрыть сравнение">×</button>
+<h2>Проверка вектора</h2>
+<p id="vectorStats" class="muted"></p>
+<div class="vector-compare">
+  <figure><figcaption>PNG · текущая сетка</figcaption><div class="compare-image checker"><img id="rasterImage" alt="Растровый кадр для сравнения"></div></figure>
+  <figure><figcaption>SVG · векторные контуры</figcaption><div class="compare-image checker"><img id="vectorImage" alt="Результат векторного экспорта"></div></figure>
+</div>
+<a id="downloadVector" class="primary" download="cloth-composition.svg">Скачать SVG</a>
+</dialog>
+
+<script type="module" src="app.mjs"></script>
+<script type="module" src="ui.mjs"></script>
+</body>
+</html>
