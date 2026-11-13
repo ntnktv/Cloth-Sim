@@ -1682,6 +1682,17 @@ function pngBlob() {
     canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Не удалось сохранить кадр."))), "image/png"),
   );
 }
+const MP4_TYPES = ["video/mp4;codecs=avc1.42E01E", "video/mp4;codecs=avc1", "video/mp4"],
+  WEBM_TYPES = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"];
+const supportedType = (list) =>
+  window.MediaRecorder ? list.find((m) => MediaRecorder.isTypeSupported(m)) : undefined;
+const exportFps = () => (+$("frameRate").value === 60 ? 60 : 30);
+// The MP4 recorder is not in every browser; the option says so instead of failing on export.
+if (!supportedType(MP4_TYPES)) {
+  const option = $("format").querySelector('[value="mp4"]');
+  option.disabled = true;
+  option.textContent = "видео / MP4 — не поддерживается";
+}
 function exportSeconds() {
   const v = Math.round(+$("duration").value);
   const s = Number.isFinite(v) ? Math.max(1, Math.min(60, v)) : 5;
@@ -1787,15 +1798,17 @@ $("svg").onclick = async () => {
 };
 // Simulates count + blend frames and returns a function that applies loop frame i: the first
 // frames are cross-faded with the frames after the end, so frame count-1 flows into frame 0.
-async function simulateLoop(count, dt) {
-  const blend = Math.min(count, 45),
+async function simulateLoop(count, fps) {
+  const substeps = Math.round(60 / fps),
+    dt = (1 / 60) * scene.speed,
+    blend = Math.min(count, Math.round(fps * 1.5)),
     active = flags.filter((f) => f.visible && f.animationEnabled !== false),
     bytes = active.reduce((s, f) => s + f.cloth.p.byteLength, 0) * (count + blend);
   if (bytes > 500e6) throw new Error("Слишком длинный цикл для такой сцены. Уменьшите длительность.");
   const record = [];
   for (let i = 0; i < count + blend; i++) {
     if (cancel) throw new Error("Экспорт отменён.");
-    if (i) await stepAsync(2, dt);
+    if (i) await stepAsync(substeps, dt);
     record.push(active.map((f) => f.cloth.p.slice()));
     if (i % 10 === 0) status(`Считаю цикл: ${Math.round((i / (count + blend)) * 100)}%`);
   }
@@ -1818,17 +1831,18 @@ async function exportSequence() {
   const starts = new Map(
     videos(flags.filter((f) => f.animationEnabled !== false)).map((v) => [v, v.currentTime]),
   );
-  const count = exportSeconds() * 30,
+  const fps = exportFps(),
+    count = exportSeconds() * fps,
     files = [],
     [w, h] = rasterDimensions();
   let bytes = 0;
-  const loop = $("loop").checked ? await simulateLoop(count, (1 / 60) * scene.speed) : null;
+  const loop = $("loop").checked ? await simulateLoop(count, fps) : null;
   for (let frame = 0; frame < count; frame++) {
     if (cancel) throw new Error("Экспорт отменён.");
     if (loop) loop(frame);
-    else if (frame) await stepAsync(2, (1 / 60) * scene.speed);
+    else if (frame) await stepAsync(Math.round(60 / fps), (1 / 60) * scene.speed);
     dirty = true;
-    await Promise.all([...starts].map(([v, time]) => seekVideo(v, time + (frame / 30) * scene.speed)));
+    await Promise.all([...starts].map(([v, time]) => seekVideo(v, time + (frame / fps) * scene.speed)));
     if (cancel) throw new Error("Экспорт отменён.");
     renderer.draw(flags, scene, w, h, true);
     const data = new Uint8Array(await (await pngBlob()).arrayBuffer());
@@ -1841,28 +1855,38 @@ async function exportSequence() {
   }
   files.push({
     name: "README.txt",
-    data: new TextEncoder().encode(`${count} frames at 30 fps. ${w} x ${h}. ${loop ? "Seamless loop." : "Not a seamless loop."}`),
+    data: new TextEncoder().encode(
+      `${count} frames at ${fps} fps. ${w} x ${h}. ${loop ? "Seamless loop." : "Not a seamless loop."}`,
+    ),
   });
-  download(makeZip(files), "cloth-composition-30fps.zip");
+  download(makeZip(files), `cloth-composition-${fps}fps.zip`);
   status("PNG-последовательность композиции сохранена.");
 }
 async function exportVideo() {
   if (!window.MediaRecorder || !canvas.captureStream)
     throw new Error("Выберите PNG-последовательность: видеозапись недоступна.");
-  const mime = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm", "video/mp4"].find((m) =>
-    MediaRecorder.isTypeSupported(m),
-  );
-  if (!mime) throw new Error("Видеокодек недоступен.");
+  const wantMp4 = $("format").value === "mp4",
+    mime = supportedType(wantMp4 ? MP4_TYPES : WEBM_TYPES),
+    fps = exportFps();
+  if (!mime)
+    throw new Error(
+      wantMp4
+        ? "Этот браузер не умеет записывать MP4. Выберите WebM или PNG-последовательность."
+        : "Видеокодек недоступен.",
+    );
   let [w, h] = rasterDimensions();
   w = Math.max(2, Math.round(w / 2) * 2);
   h = Math.max(2, Math.round(h / 2) * 2);
   const opts = { ...scene, background: scene.background === "transparent" ? "#171817" : scene.background };
   renderer.draw(flags, opts, w, h, true);
-  const stream = canvas.captureStream(30),
+  const stream = canvas.captureStream(fps),
     chunks = [];
   let recorder;
   try {
-    recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 12000000 });
+    recorder = new MediaRecorder(stream, {
+      mimeType: mime,
+      videoBitsPerSecond: Math.min(48e6, Math.max(8e6, Math.round(w * h * fps * 0.15))),
+    });
     const done = new Promise((resolve, reject) => {
       recorder.ondataavailable = (e) => {
         if (e.data.size) chunks.push(e.data);
@@ -1871,26 +1895,33 @@ async function exportVideo() {
       recorder.onerror = () => reject(new Error("Ошибка записи видео."));
     });
     const duration = exportSeconds(),
-      loop = $("loop").checked ? await simulateLoop(duration * 30, (1 / 60) * scene.speed) : null;
+      loop = $("loop").checked ? await simulateLoop(duration * fps, fps) : null;
     recordingMedia = true;
     syncVideos(flags, true, scene.speed, status);
     recorder.start();
-    const start = performance.now();
+    const start = performance.now(),
+      interval = 1000 / fps;
     let previous = start,
+      drawn = 0,
+      lastDraw = 0,
       acc = 0;
     try {
       while ((performance.now() - start) / 1000 < duration && !cancel) {
         await new Promise(requestAnimationFrame);
         const now = performance.now();
+        // The stream samples the canvas at `fps`, so drawing more often is wasted work.
+        if (now - lastDraw < interval - 1.5) continue;
+        lastDraw = now;
         acc += Math.min((now - previous) / 1000, 0.1) * scene.speed;
         previous = now;
         const n = Math.min(6, Math.floor(acc * 60));
-        if (loop) loop(Math.min(duration * 30 - 1, Math.floor(((now - start) / 1000) * 30)));
+        if (loop) loop(Math.min(duration * fps - 1, Math.floor(((now - start) / 1000) * fps)));
         else if (n) {
           acc -= n / 60;
           await stepAsync(n);
         }
         renderer.draw(flags, opts, w, h, true);
+        drawn++;
         status(`Запись композиции: ${Math.min(duration, (now - start) / 1000).toFixed(1)} / ${duration} сек`);
       }
     } finally {
@@ -1902,7 +1933,14 @@ async function exportVideo() {
       new Blob(chunks, { type: mime }),
       "cloth-composition." + (mime.includes("mp4") ? "mp4" : "webm"),
     );
-    status("Видео композиции сохранено.");
+    // Video is captured while the scene plays, so a heavy scene yields fewer frames than asked.
+    const real = drawn / Math.max(0.001, (performance.now() - start) / 1000);
+    status(
+      `Видео композиции сохранено (${mime.includes("mp4") ? "MP4" : "WebM"}).` +
+        (real < fps * 0.8
+          ? ` Компьютер успевал рисовать ~${Math.round(real)} кадров/с вместо ${fps}: для точной частоты используйте PNG-последовательность.`
+          : ""),
+    );
   } finally {
     recordingMedia = false;
     syncVideos(flags, false, scene.speed);
@@ -2359,28 +2397,46 @@ function fitTextures() {
 $("settle").onclick = async () => {
   if (busy || loading || !flags.length) return;
   cancel = false;
+  settling = true;
   lock(true, "Проматываю симуляцию…");
   try {
-    for (let i = 0; i < 6 && !cancel; i++) {
-      await stepAsync(30);
-      status(`Проматываю симуляцию: ${Math.round(((i + 1) / 6) * 100)}%`);
+    // Advanced in small chunks so the scrub buffer keeps usable detail of what was skipped.
+    for (let i = 0; i < 30 && !cancel; i++) {
+      await stepAsync(6);
+      status(`Проматываю симуляцию: ${Math.round(((i + 1) / 30) * 100)}%`);
     }
     status("Промотано 3 секунды.");
   } finally {
-    clearTimeline();
+    settling = false;
     lock(false);
     draw();
   }
 };
 // ---------- Timeline: recent simulation frames for scrubbing ----------
-const timeline = { frames: [], bytes: 0, index: null, tick: 0 };
+const timeline = { frames: [], bytes: 0, at: null, tick: 0, label: "" };
+// Frames are addressed by their moment in time: old frames drop out of the buffer as the
+// simulation runs, so an array index would mean a different moment from one second to the next.
+function frameIndexAt(time) {
+  let best = 0,
+    bestDistance = Infinity;
+  for (let i = 0; i < timeline.frames.length; i++) {
+    const d = Math.abs(timeline.frames[i].elapsed - time);
+    if (d <= bestDistance) {
+      bestDistance = d;
+      best = i;
+    }
+  }
+  return best;
+}
 function clearTimeline() {
   timeline.frames = [];
   timeline.bytes = 0;
-  timeline.index = null;
+  timeline.at = null;
 }
+// Fast-forwarding records too, so the scrub buffer covers what was skipped; export does not.
+let settling = false;
 function recordFrame(steps = 1) {
-  if (busy || (timeline.tick += steps) < 2) return;
+  if ((busy && !settling) || (timeline.tick += steps) < 2) return;
   timeline.tick = 0;
   const states = new Map();
   let bytes = 0;
@@ -2405,14 +2461,14 @@ function applyFrame(i) {
   }
   touchSim();
   elapsed = frame.elapsed;
-  timeline.index = i;
+  timeline.at = frame.elapsed;
   draw();
 }
 // Continue the simulation from the scrubbed frame: velocities come from the previous frame.
 function resumeTimeline() {
-  const i = timeline.index;
-  if (i == null) return;
-  timeline.index = null;
+  if (timeline.at == null) return;
+  const i = frameIndexAt(timeline.at);
+  timeline.at = null;
   const frame = timeline.frames[i],
     prev = timeline.frames[i - 1],
     dt = prev ? frame.elapsed - prev.elapsed : 0;
@@ -2427,16 +2483,25 @@ function resumeTimeline() {
 }
 function updateTimeline() {
   const t = $("timeline"),
-    max = Math.max(0, timeline.frames.length - 1);
-  t.disabled = busy || max < 1;
-  if (+t.max !== max) t.max = max;
-  const value = timeline.index ?? max;
-  if (+t.value !== value) t.value = value;
+    frames = timeline.frames,
+    on = !busy && frames.length > 1,
+    lo = on ? frames[0].elapsed : 0,
+    hi = on ? frames[frames.length - 1].elapsed : 0;
+  t.disabled = !on;
+  t.step = 0.01;
+  if (+t.min !== lo) t.min = lo;
+  if (+t.max !== hi) t.max = hi;
+  const value = timeline.at ?? hi;
+  if (Math.abs(+t.value - value) > 0.004) t.value = value;
+  const label = on
+    ? `Перемотка: сохранены последние ${(hi - lo).toFixed(1)} с`
+    : "Перемотка станет доступна во время симуляции";
+  if (label !== timeline.label) t.title = timeline.label = label;
 }
 $("timeline").oninput = () => {
   if (busy) return;
   if (playing) play(false);
-  applyFrame(+$("timeline").value);
+  applyFrame(frameIndexAt(+$("timeline").value));
 };
 
 // ---------- Undo / redo ----------
