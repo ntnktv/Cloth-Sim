@@ -38,6 +38,7 @@ const scene = {
   wire: false,
   speed: 1,
   globalWind: true,
+  groups: {},
   wind: { wind: "left", strength: clothDefaults.strength, turbulence: clothDefaults.turbulence, angle: clothDefaults.angle },
 };
 let recordingMedia = false;
@@ -141,59 +142,115 @@ function updateButtons() {
   $("exportInfo").textContent = `SVG: ${scene.width} × ${scene.height} · ${v.length} видимых флагов`;
   $("frameInfo").textContent = scene.width + " × " + scene.height;
 }
-// Layer list shows the front layer on top (reverse of the back-to-front flags array).
 // Reordering uses pointer events (works when the drag starts on the row's button).
-let layerDrag = null;
+// A group header drags its whole block; a flag dragged among another group's rows joins it,
+// and dragged outside every group it leaves its own.
+let layerDrag = null,
+  enteredGroup = null;
 function clearDropMarks() {
   for (const el of $("objectList").querySelectorAll(".drop-before,.drop-after,.dragging-layer"))
     el.classList.remove("drop-before", "drop-after", "dragging-layer");
 }
+const groupSpan = (list, g) => {
+  const members = list.filter((f) => f.group === g);
+  return members.length ? [list.indexOf(members[0]), list.indexOf(members[members.length - 1])] : null;
+};
+function applyLayerDrop(ids, target, after, movingGroup) {
+  const moving = flags.filter((f) => ids.has(f.id)),
+    rest = flags.filter((f) => !ids.has(f.id));
+  if (!moving.length || !rest.length) return;
+  let index, destGroup;
+  if (target.group != null) {
+    const span = groupSpan(rest, target.group);
+    if (!span) return;
+    index = span[1] + 1;
+    destGroup = after && !movingGroup ? target.group : null;
+  } else {
+    const f = rest.find((x) => x.id === target.flagId);
+    if (!f) return;
+    index = rest.indexOf(f) + (after ? 0 : 1);
+    destGroup = movingGroup ? null : f.group;
+    // A whole group never lands inside another group: it goes above or below it.
+    if (movingGroup && f.group) {
+      const span = groupSpan(rest, f.group);
+      index = after ? span[0] : span[1] + 1;
+    }
+  }
+  if (!movingGroup) for (const f of moving) f.group = destGroup;
+  rest.splice(index, 0, ...moving);
+  flags = rest;
+  sync();
+  scheduleCommit(0);
+}
 $("objectList").addEventListener("pointerdown", (e) => {
   const entry = e.target.closest(".object-entry");
-  if (!entry || busy || e.button !== 0 || e.target.closest(".layer-pause,.visibility,.lock,.badge,input")) return;
-  layerDrag = { id: +entry.dataset.flagId, y: e.clientY, moved: false, target: null, after: false };
+  if (!entry || busy || e.button !== 0 || e.target.closest(".layer-pause,.visibility,.lock,.badge,.twisty,input"))
+    return;
+  const group = entry.dataset.groupId ? +entry.dataset.groupId : null;
+  layerDrag = { group, id: entry.dataset.flagId ? +entry.dataset.flagId : null, y: e.clientY, moved: false, target: null };
 });
 window.addEventListener("pointermove", (e) => {
   if (!layerDrag) return;
   if (!layerDrag.moved && Math.abs(e.clientY - layerDrag.y) < 5) return;
   if (!layerDrag.moved) {
     layerDrag.moved = true;
-    if (!selection.has(layerDrag.id)) {
-      setSelection([layerDrag.id]);
-      sync();
+    if (layerDrag.group != null) layerDrag.ids = new Set(groupFlags(layerDrag.group).map((f) => f.id));
+    else {
+      if (!selection.has(layerDrag.id)) {
+        setSelection([layerDrag.id]);
+        sync();
+      }
+      layerDrag.ids = new Set(selection);
     }
-    layerDrag.ids = new Set(selection);
+    // Dragging a whole group — by its header or with all its rows selected — keeps it together.
+    const moved = flags.filter((f) => layerDrag.ids.has(f.id)),
+      one = new Set(moved.map((f) => f.group));
+    if (one.size === 1 && moved[0].group && moved.length === groupFlags(moved[0].group).length)
+      layerDrag.group = moved[0].group;
     document.body.classList.add("reordering");
   }
   clearDropMarks();
   for (const el of $("objectList").children)
-    if (layerDrag.ids.has(+el.dataset.flagId)) el.classList.add("dragging-layer");
+    if (
+      (el.dataset.flagId && layerDrag.ids.has(+el.dataset.flagId)) ||
+      (el.dataset.groupId && groupFlags(+el.dataset.groupId).every((f) => layerDrag.ids.has(f.id)))
+    )
+      el.classList.add("dragging-layer");
   const over = document.elementFromPoint(e.clientX, e.clientY)?.closest?.(".object-entry");
   layerDrag.target = null;
-  if (over && !layerDrag.ids.has(+over.dataset.flagId)) {
+  if (over && !over.classList.contains("dragging-layer")) {
     const r = over.getBoundingClientRect();
     layerDrag.after = e.clientY > r.top + r.height / 2;
-    layerDrag.target = +over.dataset.flagId;
+    layerDrag.target = over.dataset.groupId
+      ? { group: +over.dataset.groupId }
+      : { flagId: +over.dataset.flagId };
     over.classList.add(layerDrag.after ? "drop-after" : "drop-before");
   }
+});
+window.addEventListener("pointercancel", () => {
+  if (!layerDrag) return;
+  layerDrag = null;
+  document.body.classList.remove("reordering");
+  clearDropMarks();
 });
 window.addEventListener("pointerup", () => {
   if (!layerDrag) return;
   const d = layerDrag;
   document.body.classList.remove("reordering");
   clearDropMarks();
-  if (d.moved && d.target != null) moveLayers(d.ids, d.target, d.after);
+  if (d.moved && d.target) applyLayerDrop(d.ids, d.target, d.after, d.group);
   // Keep "moved" visible to the click that follows this pointerup, then reset.
   setTimeout(() => {
     if (layerDrag === d) layerDrag = null;
   }, 0);
 });
+// A click in the list picks that very layer, as in Figma's layer panel; the canvas picks groups.
 function chooseInList(f, e) {
   if (busy) return;
-  // A repeated plain click on the only selected row changes nothing (keeps the row alive for double click).
   if (!e.shiftKey && !e.metaKey && !e.ctrlKey && selection.size === 1 && selection.has(f.id)) return;
+  enteredGroup = f.group || null;
   if (e.shiftKey && selectedId != null) {
-    const shown = [...flags].reverse(),
+    const shown = layerRows().filter((r) => r.flag).map((r) => r.flag),
       a = shown.findIndex((x) => x.id === selectedId),
       b = shown.findIndex((x) => x.id === f.id);
     if (a >= 0 && b >= 0) {
@@ -210,146 +267,267 @@ function chooseInList(f, e) {
   } else setSelection([f.id]);
   sync();
 }
-function moveLayers(ids, targetId, after) {
-  const moving = flags.filter((f) => ids.has(f.id));
-  if (!moving.length || ids.has(targetId)) return;
-  const rest = flags.filter((f) => !ids.has(f.id));
-  let index = rest.findIndex((f) => f.id === targetId);
-  if (index < 0) return;
-  // "after" in the displayed list means behind the target, i.e. earlier in the array.
-  if (!after) index += 1;
+// Moves the selection through the layer order: one step, or all the way to the front or back.
+// A whole group moves as one block and never lands inside another group; flags selected inside a
+// group move only within it.
+function shiftLayers(direction, toEnd = false) {
+  const list = selectedFlags(),
+    ids = new Set(selection);
+  if (busy || !list.length) return;
+  const groups = new Set(list.map((f) => f.group).filter(Boolean));
+  if (groups.size > 1 || (groups.size === 1 && list.some((f) => !f.group)))
+    return status("Для перестановки выберите флаги из одной группы.");
+  const g = [...groups][0];
+  if (g && list.length < groupFlags(g).length) {
+    // Inside a group: reorder among its own members.
+    const members = groupFlags(g),
+      lo = flags.indexOf(members[0]),
+      hi = flags.indexOf(members[members.length - 1]);
+    if (toEnd) {
+      const moving = members.filter((f) => ids.has(f.id)),
+        others = members.filter((f) => !ids.has(f.id));
+      flags.splice(lo, members.length, ...(direction > 0 ? [...others, ...moving] : [...moving, ...others]));
+    } else
+      for (const f of direction > 0 ? [...members].reverse() : members) {
+        if (!ids.has(f.id)) continue;
+        const i = flags.indexOf(f),
+          j = i + direction;
+        if (j < lo || j > hi || ids.has(flags[j].id)) continue;
+        [flags[i], flags[j]] = [flags[j], flags[i]];
+      }
+    return sync();
+  }
+  const moving = flags.filter((f) => ids.has(f.id)),
+    rest = flags.filter((f) => !ids.has(f.id));
+  if (!rest.length) return;
+  let index;
+  if (toEnd) index = direction > 0 ? rest.length : 0;
+  else {
+    const anchor = flags.indexOf(direction > 0 ? moving[moving.length - 1] : moving[0]),
+      neighbour = flags[anchor + direction];
+    if (!neighbour) return;
+    if (neighbour.group) {
+      const span = groupSpan(rest, neighbour.group);
+      index = direction > 0 ? span[1] + 1 : span[0];
+    } else index = rest.indexOf(neighbour) + (direction > 0 ? 1 : 0);
+  }
   rest.splice(index, 0, ...moving);
   flags = rest;
   sync();
 }
-function shiftLayers(direction) {
-  if (busy || !selection.size) return;
-  const order = direction > 0 ? [...flags].reverse() : [...flags];
-  for (const f of order) {
-    if (!selection.has(f.id)) continue;
-    const i = flags.indexOf(f),
-      j = i + direction;
-    if (j < 0 || j >= flags.length || selection.has(flags[j].id)) continue;
-    [flags[i], flags[j]] = [flags[j], flags[i]];
+// Layer list shows the front layer on top (reverse of the back-to-front flags array).
+// Group members are kept contiguous in that array, so a group is one block of rows.
+function groupInfo(g) {
+  scene.groups[g] ||= { name: "Группа " + g, open: true };
+  return scene.groups[g];
+}
+const groupFlags = (g) => flags.filter((f) => f.group === g);
+function layerRows() {
+  const rows = [],
+    seen = new Set();
+  for (const f of [...flags].reverse()) {
+    if (!f.group) {
+      rows.push({ flag: f, depth: 0 });
+      continue;
+    }
+    if (seen.has(f.group)) continue;
+    seen.add(f.group);
+    const members = groupFlags(f.group);
+    rows.push({ group: f.group, members });
+    if (groupInfo(f.group).open) for (const m of [...members].reverse()) rows.push({ flag: m, depth: 1 });
   }
-  sync();
+  return rows;
+}
+const icon = (paths, size = 16) =>
+  `<svg viewBox="0 0 ${size} ${size}" aria-hidden="true">${paths}</svg>`;
+const EYE_OPEN = icon('<path d="M2 10s3-5.5 8-5.5S18 10 18 10s-3 5.5-8 5.5S2 10 2 10Z"/><circle cx="10" cy="10" r="2.4"/>', 20),
+  EYE_SHUT = icon('<path d="M2 10s3-5.5 8-5.5S18 10 18 10s-3 5.5-8 5.5S2 10 2 10Z"/><path d="M3.5 16.5 16.5 3.5"/>', 20),
+  LOCK_SHUT = icon('<rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/>'),
+  LOCK_OPEN = icon('<rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 4.6-1.3"/>');
+// Inline rename, used by both flag rows and group headers.
+function startRename(host, value, apply) {
+  if (busy) return;
+  const input = document.createElement("input");
+  input.className = "rename";
+  input.value = value;
+  input.maxLength = 80;
+  host.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = (save) => {
+    if (done) return;
+    done = true;
+    if (save) apply(input.value.trim() || value);
+    sync();
+    scheduleCommit(0);
+  };
+  input.onblur = () => finish(true);
+  input.onkeydown = (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") finish(true);
+    if (e.key === "Escape") finish(false);
+  };
+}
+function toggleButton(className, on, html, title, onclick) {
+  const b = document.createElement("button");
+  b.className = className;
+  b.innerHTML = html;
+  b.title = title;
+  b.setAttribute("aria-label", title);
+  b.setAttribute("aria-pressed", String(on));
+  b.onclick = (e) => {
+    e.stopPropagation();
+    if (!busy) onclick();
+  };
+  return b;
+}
+function groupEntry(g, members) {
+  const info = groupInfo(g),
+    entry = document.createElement("div"),
+    row = document.createElement("div"),
+    ids = members.map((m) => m.id),
+    selected = ids.every((id) => selection.has(id)),
+    visible = members.some((m) => m.visible),
+    locked = members.every((m) => m.locked);
+  entry.className = "object-entry group-entry";
+  entry.dataset.groupId = g;
+  row.className =
+    "object-row group-row" +
+    (selected && enteredGroup !== g ? " selected" : "") +
+    (!visible ? " is-hidden" : "") +
+    (locked ? " is-locked" : "");
+  const twisty = document.createElement("button");
+  twisty.className = "twisty" + (info.open ? " open" : "");
+  twisty.innerHTML = icon('<path d="M6 4l5 4-5 4Z"/>');
+  twisty.title = info.open ? "Свернуть группу" : "Развернуть группу";
+  twisty.setAttribute("aria-label", twisty.title);
+  twisty.setAttribute("aria-expanded", String(info.open));
+  twisty.onclick = (e) => {
+    e.stopPropagation();
+    info.open = !info.open;
+    renderList();
+  };
+  const choose = document.createElement("button");
+  choose.className = "choose-object group-choose";
+  choose.setAttribute("aria-pressed", String(selected));
+  choose.innerHTML =
+    icon('<rect x="2.5" y="2.5" width="11" height="11" rx="1" stroke-dasharray="3 2"/>') +
+    `<span class="object-label">${info.name.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c])}</span>` +
+    `<span class="group-count">${members.length}</span>`;
+  choose.onclick = (e) => {
+    if (layerDrag?.moved || busy) return;
+    // A repeated plain click changes nothing, so the row survives for a double click (rename).
+    if (!e.shiftKey && !e.metaKey && !e.ctrlKey && selected && selection.size === ids.length && !enteredGroup)
+      return;
+    enteredGroup = null;
+    if (e.shiftKey || e.metaKey || e.ctrlKey) {
+      const next = new Set(selection);
+      const add = !selected;
+      for (const id of ids) (add ? next.add(id) : next.delete(id)).valueOf?.();
+      setSelection([...next], add ? ids[ids.length - 1] : selectedId);
+    } else setSelection(ids);
+    sync();
+  };
+  choose.ondblclick = () =>
+    startRename(choose.querySelector(".object-label"), info.name, (name) => (info.name = name));
+  row.append(
+    twisty,
+    choose,
+    toggleButton("lock", locked, locked ? LOCK_SHUT : LOCK_OPEN, locked ? "Снять замок с группы" : "Закрепить группу", () => {
+      for (const m of members) m.locked = locked ? undefined : true;
+      sync();
+    }),
+    toggleButton("visibility", visible, visible ? EYE_OPEN : EYE_SHUT, visible ? "Скрыть группу" : "Показать группу", () => {
+      for (const m of members) m.visible = !visible;
+      sync();
+      updateMedia();
+    }),
+  );
+  entry.append(row);
+  return entry;
+}
+function flagEntry(f, depth) {
+  const entry = document.createElement("div");
+  entry.className = "object-entry" + (depth ? " nested" : "");
+  entry.dataset.flagId = f.id;
+  const pause = document.createElement("button");
+  pause.className = "layer-pause";
+  pause.dataset.flagId = f.id;
+  const paused = f.animationEnabled === false;
+  pause.innerHTML = paused
+    ? icon('<path d="M5 3L13 8L5 13Z"/>')
+    : icon('<path d="M4 3H7V13H4ZM10 3H13V13H10Z"/>');
+  pause.classList.toggle("is-paused", paused);
+  pause.title = (paused ? "Продолжить анимацию: " : "Пауза анимации: ") + f.name;
+  pause.setAttribute("aria-label", pause.title);
+  pause.setAttribute("aria-pressed", String(paused));
+  pause.disabled = busy || loading;
+  pause.onclick = () => {
+    if (busy || loading || pointer) return;
+    f.animationEnabled = paused;
+    if (isVideo(f.image)) f.image.playFailed = false;
+    updateMedia();
+    renderList();
+    draw();
+  };
+  const row = document.createElement("div");
+  row.className =
+    "object-row" +
+    (selection.has(f.id) ? " selected" : "") +
+    (!f.visible ? " is-hidden" : "") +
+    (f.locked ? " is-locked" : "");
+  const choose = document.createElement("button");
+  choose.className = "choose-object";
+  choose.setAttribute("aria-pressed", String(selection.has(f.id)));
+  choose.setAttribute("aria-label", "Выбрать " + f.name);
+  const img = document.createElement("img");
+  img.src = f.thumbnail;
+  img.alt = "";
+  img.draggable = false;
+  const label = document.createElement("span");
+  label.className = "object-label";
+  label.textContent = f.name;
+  choose.append(img, label);
+  choose.onclick = (e) => {
+    if (layerDrag?.moved) return;
+    chooseInList(f, e);
+  };
+  choose.ondblclick = () => startRename(label, f.name, (name) => (f.name = name));
+  row.append(choose);
+  if (!f.shapes) {
+    const badge = document.createElement("button");
+    badge.className = "badge" + (f.reason ? " warn" : "");
+    badge.textContent = f.reason ? "!" : "растр";
+    badge.title = f.reason
+      ? "Не попадёт в SVG: " + f.reason
+      : "Растровый слой: есть в PNG и анимации, для SVG его нужно скрыть";
+    badge.onclick = () => status(badge.title);
+    row.append(badge);
+  }
+  row.append(
+    toggleButton("lock", !!f.locked, f.locked ? LOCK_SHUT : LOCK_OPEN, f.locked ? "Снять замок" : "Закрепить: нельзя выбрать и сдвинуть на холсте", () => {
+      f.locked = f.locked ? undefined : true;
+      sync();
+    }),
+    toggleButton("visibility", f.visible, f.visible ? EYE_OPEN : EYE_SHUT, (f.visible ? "Скрыть " : "Показать ") + f.name, () => {
+      f.visible = !f.visible;
+      renderList();
+      updateButtons();
+      draw();
+    }),
+  );
+  entry.append(pause, row);
+  return entry;
 }
 function renderList() {
   const list = $("objectList");
   list.replaceChildren();
-  for (const f of [...flags].reverse()) {
-    const entry = document.createElement("div");
-    entry.className = "object-entry";
-    entry.dataset.flagId = f.id;
-    const pause = document.createElement("button");
-    pause.className = "layer-pause";
-    pause.dataset.flagId = f.id;
-    const paused = f.animationEnabled === false;
-    pause.innerHTML = paused
-      ? '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3L13 8L5 13Z"/></svg>'
-      : '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 3H7V13H4ZM10 3H13V13H10Z"/></svg>';
-    pause.classList.toggle("is-paused", paused);
-    pause.title = (paused ? "Продолжить анимацию: " : "Пауза анимации: ") + f.name;
-    pause.setAttribute("aria-label", pause.title);
-    pause.setAttribute("aria-pressed", String(paused));
-    pause.disabled = busy || loading;
-    pause.onclick = () => {
-      if (busy || loading || pointer) return;
-      f.animationEnabled = paused;
-      if (isVideo(f.image)) f.image.playFailed = false;
-      updateMedia();
-      renderList();
-      draw();
-    };
-    const row = document.createElement("div");
-    row.className =
-      "object-row" + (selection.has(f.id) ? " selected" : "") + (!f.visible ? " is-hidden" : "");
-    const choose = document.createElement("button");
-    choose.className = "choose-object";
-    choose.setAttribute("aria-pressed", String(selection.has(f.id)));
-    choose.setAttribute("aria-label", "Выбрать " + f.name);
-    const img = document.createElement("img");
-    img.src = f.thumbnail;
-    img.alt = "";
-    const label = document.createElement("span");
-    label.className = "object-label";
-    label.textContent = f.name;
-    choose.append(img, label);
-    choose.onclick = (e) => {
-      if (layerDrag?.moved) return;
-      chooseInList(f, e);
-    };
-    choose.ondblclick = () => {
-      if (busy) return;
-      const input = document.createElement("input");
-      input.className = "rename";
-      input.value = f.name;
-      input.maxLength = 80;
-      choose.replaceWith(input);
-      input.focus();
-      input.select();
-      let done = false;
-      const finish = (save) => {
-        if (done) return;
-        done = true;
-        if (save) f.name = input.value.trim() || f.name;
-        sync();
-        scheduleCommit(0);
-      };
-      input.onblur = () => finish(true);
-      input.onkeydown = (e) => {
-        e.stopPropagation();
-        if (e.key === "Enter") finish(true);
-        if (e.key === "Escape") finish(false);
-      };
-    };
-    if (f.group) {
-      entry.dataset.group = f.group;
-      entry.style.setProperty("--group", groupColor(f.group));
-    }
-    if (f.locked) row.classList.add("is-locked");
-    const lockButton = document.createElement("button");
-    lockButton.className = "lock";
-    lockButton.title = f.locked ? "Снять замок" : "Закрепить: нельзя выбрать и сдвинуть на холсте";
-    lockButton.setAttribute("aria-label", lockButton.title);
-    lockButton.innerHTML = f.locked
-      ? '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>'
-      : '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 4.6-1.3"/></svg>';
-    lockButton.onclick = () => {
-      if (busy) return;
-      f.locked = f.locked ? undefined : true;
-      sync();
-    };
-    const eye = document.createElement("button");
-    eye.className = "visibility";
-    eye.innerHTML = f.visible
-      ? '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2 10s3-5.5 8-5.5S18 10 18 10s-3 5.5-8 5.5S2 10 2 10Z"/><circle cx="10" cy="10" r="2.4"/></svg>'
-      : '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2 10s3-5.5 8-5.5S18 10 18 10s-3 5.5-8 5.5S2 10 2 10Z"/><path d="M3.5 16.5 16.5 3.5"/></svg>';
-    eye.title = f.visible ? "Скрыть" : "Показать";
-    eye.setAttribute("aria-label", (f.visible ? "Скрыть " : "Показать ") + f.name);
-    eye.onclick = () => {
-      if (!busy) {
-        f.visible = !f.visible;
-        renderList();
-        updateButtons();
-        draw();
-      }
-    };
-    if (!f.shapes) {
-      const badge = document.createElement("button");
-      badge.className = "badge" + (f.reason ? " warn" : "");
-      badge.textContent = f.reason ? "!" : "растр";
-      badge.title = f.reason
-        ? "Не попадёт в SVG: " + f.reason
-        : "Растровый слой: есть в PNG и анимации, для SVG его нужно скрыть";
-      badge.onclick = () => status(badge.title);
-      row.append(choose, badge, lockButton, eye);
-    } else row.append(choose, lockButton, eye);
-    entry.append(pause, row);
-    list.append(entry);
-  }
+  for (const row of layerRows())
+    list.append(row.group != null ? groupEntry(row.group, row.members) : flagEntry(row.flag, row.depth));
   updateButtons();
 }
+
 function setField(id, values, round = 100) {
   const { value, mixed } = sameValue(values);
   $(id).value = mixed || value === undefined ? "" : Math.round(value * round) / round;
@@ -357,6 +535,8 @@ function setField(id, values, round = 100) {
 }
 function sync() {
   for (const id of [...selection]) if (!flags.some((x) => x.id === id)) selection.delete(id);
+  for (const g of Object.keys(scene.groups)) if (!groupFlags(+g).length) delete scene.groups[g];
+  if (enteredGroup && !selectedFlags().some((f) => f.group === enteredGroup)) enteredGroup = null;
   const list = selectedFlags(),
     f = primary(),
     none = !list.length,
@@ -598,6 +778,10 @@ $("duplicate").onclick = async () => {
         status(e.message);
       }
     }
+    for (const [old, fresh] of regroup)
+      scene.groups[fresh] = { name: (scene.groups[old]?.name || "Группа") + " копия", open: true };
+    for (const g of new Set(flags.filter((f) => created.includes(f.id) && f.group).map((f) => f.group)))
+      packGroup(g);
     if (created.length) {
       setSelection(created);
       status(created.length > 1 ? `Создано копий: ${created.length}.` : "Создан независимый флаг со своим порывом ветра.");
@@ -1070,6 +1254,16 @@ function snapAxis(edges, targets, threshold) {
     }
   return best;
 }
+frame.ondblclick = (e) => {
+  if (busy || loading) return;
+  const point = pointerPoint(e),
+    f = hitTop(point.x, point.y);
+  if (f?.group) {
+    e.preventDefault();
+    enterGroup(f);
+    status("Вы внутри группы «" + groupInfo(f.group).name + "». Escape — выйти.");
+  }
+};
 frame.onpointerdown = (e) => {
   if (busy || loading || pointer || e.button !== 0) return;
   const point = pointerPoint(e),
@@ -1353,15 +1547,40 @@ window.addEventListener("keydown", (e) => {
   } else if (mod && e.code === "KeyD" && list.length) {
     e.preventDefault();
     $("duplicate").click();
-  } else if (mod && e.code === "BracketRight") {
+  } else if (e.code === "BracketRight") {
     e.preventDefault();
-    shiftLayers(1);
-  } else if (mod && e.code === "BracketLeft") {
+    shiftLayers(1, !mod);
+  } else if (e.code === "BracketLeft") {
     e.preventDefault();
-    shiftLayers(-1);
-  } else if (e.key === "Escape" && list.length) {
-    setSelection([]);
+    shiftLayers(-1, !mod);
+  } else if (mod && e.shiftKey && e.code === "KeyH" && list.length) {
+    e.preventDefault();
+    const hide = list.every((f) => f.visible);
+    for (const f of list) f.visible = !hide;
     sync();
+    updateMedia();
+  } else if (mod && e.shiftKey && e.code === "KeyL" && list.length) {
+    e.preventDefault();
+    const lock = !list.every((f) => f.locked);
+    for (const f of list) f.locked = lock || undefined;
+    sync();
+  } else if (mod && e.code === "Digit0") {
+    e.preventDefault();
+    setZoom(1);
+  } else if (e.shiftKey && e.code === "Digit1") {
+    e.preventDefault();
+    fitZoom();
+  } else if (e.shiftKey && e.code === "Digit2" && list.length) {
+    e.preventDefault();
+    zoomToSelection(list);
+  } else if (e.code === "Enter" && list.length) {
+    e.preventDefault();
+    if (!enterGroup()) status("Выбранный флаг не в группе.");
+  } else if (e.key === "Escape") {
+    if (!exitGroup() && list.length) {
+      setSelection([]);
+      sync();
+    }
   }
 });
 let dragCount = 0;
@@ -1767,6 +1986,24 @@ function setZoom(z, anchor) {
   $("zoomCustom").textContent = Math.round(zoom * 100) + "%";
   select.value = preset ? preset.value : "custom";
 }
+// Shift+1 fits the artboard in the stage; Shift+2 fits the selection, as in Figma.
+function fitZoom() {
+  setZoom(1);
+  $("stage").scrollTo({ left: 0, top: 0 });
+}
+function zoomToSelection(list) {
+  const b = unionBounds(list),
+    stage = $("stage").getBoundingClientRect(),
+    width = Math.max(1, b.right - b.left),
+    height = Math.max(1, b.bottom - b.top),
+    fit = Math.min(scene.width / width, scene.height / height) * 0.9;
+  setZoom(fit);
+  const frameBox = $("frame").getBoundingClientRect(),
+    cx = frameBox.left + ((b.left + b.right) / 2 / scene.width) * frameBox.width,
+    cy = frameBox.top + ((b.top + b.bottom) / 2 / scene.height) * frameBox.height;
+  $("stage").scrollLeft += cx - (stage.left + stage.width / 2);
+  $("stage").scrollTop += cy - (stage.top + stage.height / 2);
+}
 $("previewZoom").onchange = () => {
   if ($("previewZoom").value !== "custom") setZoom(+$("previewZoom").value);
 };
@@ -1816,26 +2053,67 @@ window.addEventListener("blur", () => {
 });
 
 // ---------- Groups and locks ----------
-const groupColor = (g) => `hsl(${(g * 67) % 360} 70% 55%)`;
+// A click on the canvas picks the whole group; a double click steps into it and picks one flag.
 function groupMembers(ids) {
-  const groups = new Set(flags.filter((f) => ids.includes(f.id) && f.group).map((f) => f.group));
-  if (!groups.size) return ids;
-  return [...new Set([...ids, ...flags.filter((f) => groups.has(f.group) && !f.locked).map((f) => f.id)])];
+  const out = new Set(ids);
+  for (const id of ids) {
+    const f = flags.find((x) => x.id === id);
+    if (f?.group && f.group !== enteredGroup)
+      for (const m of groupFlags(f.group)) if (!m.locked) out.add(m.id);
+  }
+  return [...out];
 }
 const nextGroup = () => Math.max(0, ...flags.map((f) => f.group || 0)) + 1;
+// Group members are stored as one contiguous block, so the layer list and the z-order agree.
+function packGroup(g) {
+  const members = flags.filter((f) => f.group === g);
+  if (!members.length) return [];
+  const top = Math.max(...members.map((m) => flags.indexOf(m))),
+    above = flags.slice(top + 1).filter((f) => f.group !== g).length,
+    rest = flags.filter((f) => f.group !== g);
+  flags = [...rest.slice(0, rest.length - above), ...members, ...rest.slice(rest.length - above)];
+  return members;
+}
 function groupSelection() {
   const list = selectedFlags();
   if (busy || list.length < 2) return;
-  const g = nextGroup();
+  const g = nextGroup(),
+    nested = new Set(list.map((f) => f.group).filter(Boolean));
   for (const f of list) f.group = g;
-  status("Флаги сгруппированы: клик по одному выбирает всю группу.");
+  for (const old of nested) delete scene.groups[old];
+  groupInfo(g);
+  enteredGroup = null;
+  const members = packGroup(g);
+  setSelection(members.map((m) => m.id));
+  status(nested.size ? "Группы объединены в одну: вложенных групп пока нет." : "Группа создана.");
   sync();
 }
 function ungroupSelection() {
   const list = selectedFlags();
   if (busy || !list.some((f) => f.group)) return;
+  for (const g of new Set(list.map((f) => f.group).filter(Boolean))) delete scene.groups[g];
   for (const f of list) f.group = undefined;
+  enteredGroup = null;
   sync();
+}
+// Steps into the group of the selected flags and picks one member, as Enter does in Figma.
+function enterGroup(flag) {
+  const f = flag || primary();
+  if (!f?.group) return false;
+  enteredGroup = f.group;
+  setSelection([f.id]);
+  sync();
+  return true;
+}
+// Steps back out: the whole group becomes the selection again.
+function exitGroup() {
+  const f = primary();
+  if (!enteredGroup || !f) return false;
+  const g = enteredGroup;
+  enteredGroup = null;
+  setSelection(groupFlags(g).filter((m) => !m.locked).map((m) => m.id), f.id);
+  sync();
+  return true;
 }
 $("groupBtn").onclick = groupSelection;
 $("ungroupBtn").onclick = ungroupSelection;
@@ -2171,13 +2449,22 @@ function stateKey() {
     scene.background,
     scene.globalWind,
     scene.wind,
+    scene.groups,
     flags.map((f) => [f.id, flagProps(f)]),
   ]);
 }
 function takeSnapshot() {
   return {
     key: stateKey(),
-    scene: { width: scene.width, height: scene.height, background: scene.background, globalWind: scene.globalWind, wind: { ...scene.wind } },
+    scene: {
+      width: scene.width,
+      height: scene.height,
+      background: scene.background,
+      globalWind: scene.globalWind,
+      wind: { ...scene.wind },
+      groups: structuredClone(scene.groups),
+    },
+    enteredGroup,
     flags: flags.map((flag) => ({
       flag,
       props: flagProps(flag),
@@ -2236,7 +2523,8 @@ function resetHistory() {
   commit();
 }
 function applySnapshot(s) {
-  Object.assign(scene, s.scene, { wind: { ...s.scene.wind } });
+  Object.assign(scene, s.scene, { wind: { ...s.scene.wind }, groups: structuredClone(s.scene.groups || {}) });
+  enteredGroup = s.enteredGroup ?? null;
   $("sceneWidth").value = scene.width;
   $("sceneHeight").value = scene.height;
   flags = s.flags.map(({ flag, props, assets }) => {
@@ -2303,6 +2591,7 @@ async function serializeProject() {
       speed: scene.speed,
       globalWind: scene.globalWind,
       wind: { ...scene.wind },
+      groups: structuredClone(scene.groups),
     },
     sources,
     flags: items,
@@ -2317,7 +2606,12 @@ async function restoreProject(data) {
     flags = [];
     setSelection([]);
     clearTimeline();
-    Object.assign(scene, data.scene, { wind: { ...scene.wind, ...data.scene.wind }, wire: scene.wire });
+    Object.assign(scene, data.scene, {
+      wind: { ...scene.wind, ...data.scene.wind },
+      groups: structuredClone(data.scene.groups || {}),
+      wire: scene.wire,
+    });
+    enteredGroup = null;
     $("sceneWidth").value = scene.width;
     $("sceneHeight").value = scene.height;
     $("shade").checked = !!scene.shade;
